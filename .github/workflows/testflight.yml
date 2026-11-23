@@ -109,7 +109,7 @@ jobs:
             -destination 'generic/platform=iOS' -archivePath build/LxTerm.xcarchive \
             CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM="$TEAM_ID" CODE_SIGN_IDENTITY="Apple Distribution" \
             PROVISIONING_PROFILE_SPECIFIER="$PROFILE" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" > archive.log 2>&1 \
-            || { grep -E "error:|warning: .*SwiftTerm" archive.log | head -n 60; tail -n 40 archive.log; exit 1; }
+            || { grep -E "error:" archive.log | head -n 60 || true; tail -n 40 archive.log; exit 1; }
           tail -n 5 archive.log
 
       - name: Export signed IPA
