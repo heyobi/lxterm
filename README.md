@@ -9,10 +9,8 @@ Not an emulated PC (iSH emulates 32-bit x86) and not a set of ported commands
 (a-Shell): the distributions' own arm64 binaries, from their own images and mirrors.
 
 <p>
-<img src="docs/screenshots/sim-lxterm-chooser.jpg" width="180" alt="Choose Alpine or Debian">
-<img src="docs/screenshots/sim-lxterm-alpine.jpg" width="180" alt="Alpine in LxTerm">
-<img src="docs/screenshots/sim-lxterm-debian.jpg" width="180" alt="Debian in LxTerm">
-<img src="docs/screenshots/sim-lxterm-resumed.jpg" width="180" alt="A shell resumed from its snapshot">
+<img src="docs/screenshots/sim-debian-shell.jpg" width="300" alt="Debian 13 in LxTerm (iOS simulator)">
+<img src="docs/screenshots/sim-lxterm-resumed.jpg" width="180" alt="A shell resumed from its snapshot (first version)">
 </p>
 
 Status: **TestFlight beta.** What works: apt/dpkg with maintainer scripts, python3, git
@@ -23,7 +21,7 @@ Docker; everything runs in an interpreter, so heavy computing is slow.
 ## How it works
 
 ```
-Alpine / Debian arm64 binaries (unmodified)
+Debian arm64 binaries (unmodified)
         │  svc #0
 core/proc.c   Linux syscalls on Darwin, Linux userland mode: processes (fork copies
               the address space, execve in place), pids/groups/signals between them,
