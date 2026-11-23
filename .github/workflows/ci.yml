@@ -17,8 +17,13 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get update -qq && sudo apt-get install -y -qq clang bc > /dev/null
-      - run: sh scripts/make-roots.sh
+      - uses: actions/cache@v4
+        id: cache
+        with:
+          path: rootfs-debian.tar.gz
+          key: rootfs-${{ hashFiles('scripts/make-roots.sh', 'tests/linux/fetch-debian.sh') }}
+      - if: steps.cache.outputs.cache-hit != 'true'
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq clang bc > /dev/null && sh scripts/make-roots.sh
       - uses: actions/upload-artifact@v4
         with: { name: rootfs, path: rootfs-debian.tar.gz, retention-days: 3 }
 
@@ -36,7 +41,7 @@ jobs:
           mkdir -p licenses && cp LICENSE NOTICE.md licenses/
           brew install xcodegen && xcodegen generate
           xcodebuild build -project LxTerm.xcodeproj -scheme LxTerm -configuration Debug -sdk iphonesimulator \
-            -destination 'generic/platform=iOS Simulator' -derivedDataPath build/dd CODE_SIGNING_ALLOWED=NO > build.log 2>&1 \
+            -destination 'generic/platform=iOS Simulator' -derivedDataPath build/dd -skipPackagePluginValidation -skipMacroValidation CODE_SIGNING_ALLOWED=NO > build.log 2>&1 \
             || { grep -E "error:" build.log | head -n 60 || true; tail -n 40 build.log; exit 1; }
       - name: Run and take screenshots
         run: |
