@@ -10,7 +10,7 @@ R=$T/debian
 sh tests/linux/fetch-debian.sh "$R"
 rm -f "$R/etc/resolv.conf"; cp /etc/resolv.conf "$R/etc/resolv.conf"
 LXRUN_STATS=1 LXRUN_QUIET=1 timeout 2400 build/lxrun "$R" /bin/sh -c \
-    'apt-get update && apt-get install -y --no-install-recommends python3 procps nano less curl ca-certificates && apt-get clean'
+    'apt-get update && apt-get install -y --no-install-recommends python3 procps nano less curl ca-certificates tmux && apt-get clean'
 LXRUN_QUIET=1 build/lxrun "$R" /usr/bin/python3 -c 'import sys; print("debian python", sys.version.split()[0])'
 # a friendlier first prompt: colours and a short welcome (only in this image's root's own files)
 cat >> "$R/root/.bashrc" <<'EOF'

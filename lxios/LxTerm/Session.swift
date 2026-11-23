@@ -11,6 +11,7 @@ final class Session: NSObject, ObservableObject, Identifiable, TerminalViewDeleg
     @Published var exited = false
     private(set) var handle: OpaquePointer?
     private(set) var resumed = false
+    private var size: (cols: Int, rows: Int)?    // the view's last size: sent again once the shell runs
     lazy var view: TerminalView = makeView()
 
     private let lock = NSLock()
@@ -67,6 +68,7 @@ final class Session: NSObject, ObservableObject, Identifiable, TerminalViewDeleg
             DispatchQueue.main.async { me.shellEnded() }
         }, ctx, &res)
         resumed = res != 0
+        if let size, let handle { lx_session_resize(handle, Int32(size.cols), Int32(size.rows)) }
         if ProcessInfo.processInfo.arguments.contains("-demo"), !resumed { demo() }
         if resumed, !history.isEmpty {
             view.feed(byteArray: history[...])                // what it showed before
@@ -77,7 +79,7 @@ final class Session: NSObject, ObservableObject, Identifiable, TerminalViewDeleg
 
     /// For screenshots (launch argument -demo): a few commands typed as a user would.
     private func demo() {
-        let cmds = ["head -n 2 /etc/os-release\r", "uname -m\r", "python3 -c 'import sys; print(sys.version)'\r", "ls /\r"]
+        let cmds = ["head -n 2 /etc/os-release\r", "python3 -c 'import sys; print(sys.version)'\r", "tmux\r", "echo inside tmux: $TMUX\r", "ls /\r"]
         DispatchQueue.global().async { [weak self] in
             Thread.sleep(forTimeInterval: 2)
             for c in cmds {
@@ -169,6 +171,7 @@ final class Session: NSObject, ObservableObject, Identifiable, TerminalViewDeleg
     }
 
     func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
+        size = (newCols, newRows)
         if let handle { lx_session_resize(handle, Int32(newCols), Int32(newRows)) }
     }
 
