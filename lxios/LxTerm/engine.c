@@ -27,6 +27,16 @@ struct lx_session {
 };
 
 static char g_root[1024];
+static FILE *g_trace;
+
+void lx_engine_trace(const char *path)
+{
+    char child[1100];
+    if (!(g_trace = fopen(path, "w"))) return;
+    setvbuf(g_trace, NULL, _IOLBF, 0);
+    snprintf(child, sizeof child, "%s.children", path);
+    setenv("AOI_CHILD_TRACE", child, 1);                           /* (vfork + execve children: core/proc.c) */
+}
 
 static void write_resolv(const char *root)
 {
@@ -115,6 +125,7 @@ lx_session *lx_session_start(const char *snap, int cols, int rows,
         aoi_proc_linux(s->p, "/root");
         aoi_proc_attach_tty_to(s->p, s->tty);
     }
+    if (g_trace) { s->p->trace = g_trace; s->p->log = g_trace; s->p->trace_shared = 1; }
     s->running = 1;
     pthread_attr_init(&at);
     pthread_attr_setstacksize(&at, 8u << 20);

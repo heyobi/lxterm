@@ -8,6 +8,9 @@
 
 typedef struct lx_session lx_session;
 
+/* Debugging: every syscall of every process to this file (call before any session). */
+void lx_engine_trace(const char *path);
+
 /* Once per launch: the root (unpacked), DNS servers for it, the fd limit. */
 void lx_engine_init(const char *root);
 

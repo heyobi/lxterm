@@ -52,6 +52,10 @@ final class Store: ObservableObject {
     }
 
     private func ready() {
+        if ProcessInfo.processInfo.arguments.contains("-trace") {
+            let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            lx_engine_trace(docs.appendingPathComponent("lxterm.trace").path)
+        }
         lx_engine_init(Store.rootDir.path)
         phase = .ready
         let ids = UserDefaults.standard.stringArray(forKey: Store.idsKey) ?? []
