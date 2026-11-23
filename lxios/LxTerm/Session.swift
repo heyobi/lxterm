@@ -12,6 +12,8 @@ final class Session: NSObject, ObservableObject, Identifiable, TerminalViewDeleg
     private(set) var handle: OpaquePointer?
     private(set) var resumed = false
     private var size: (cols: Int, rows: Int)?    // the view's last size: sent again once the shell runs
+    var ctrlArmed = false                         // the key bar's Ctrl: applies to the next key
+    private weak var keyBar: KeyBar?
     lazy var view: TerminalView = makeView()
 
     private let lock = NSLock()
@@ -35,7 +37,42 @@ final class Session: NSObject, ObservableObject, Identifiable, TerminalViewDeleg
         tv.font = UIFont.monospacedSystemFont(ofSize: CGFloat(Settings.fontSize), weight: .regular)
         let pinch = UIPinchGestureRecognizer(target: self, action: #selector(pinched(_:)))
         tv.addGestureRecognizer(pinch)
+        let tap = UITapGestureRecognizer(target: self, action: #selector(tapped))
+        tap.cancelsTouchesInView = false
+        tv.addGestureRecognizer(tap)
+        let bar = KeyBar(session: self)
+        tv.inputAccessoryView = bar
+        keyBar = bar
         return tv
+    }
+
+    /// A tap on the terminal brings the keyboard back after it was hidden.
+    @objc private func tapped() {
+        if !view.isFirstResponder { _ = view.becomeFirstResponder() }
+    }
+
+    /// Keys from the key bar (Ctrl applies to them too).
+    func sendKeys(_ bytes: [UInt8]) {
+        if exited { restart(); return }
+        guard let handle else { return }
+        var b = bytes
+        if ctrlArmed, b.count == 1 { b = [Session.ctrl(b[0])]; ctrlArmed = false; keyBar?.updateCtrl() }
+        b.withUnsafeBufferPointer { p in
+            p.baseAddress?.withMemoryRebound(to: CChar.self, capacity: p.count) { lx_session_input(handle, $0, p.count) }
+        }
+    }
+
+    static func ctrl(_ c: UInt8) -> UInt8 {
+        switch c {
+        case UInt8(ascii: "a")...UInt8(ascii: "z"): return c - 96
+        case UInt8(ascii: "A")...UInt8(ascii: "Z"): return c - 64
+        case UInt8(ascii: "["), UInt8(ascii: "3"): return 0x1b
+        case UInt8(ascii: " "), UInt8(ascii: "2"), UInt8(ascii: "@"): return 0
+        case UInt8(ascii: "\\"), UInt8(ascii: "4"): return 0x1c
+        case UInt8(ascii: "]"), UInt8(ascii: "5"): return 0x1d
+        case UInt8(ascii: "?"), UInt8(ascii: "8"): return 0x7f
+        default: return c
+        }
     }
 
     @objc private func pinched(_ g: UIPinchGestureRecognizer) {
@@ -164,6 +201,7 @@ final class Session: NSObject, ObservableObject, Identifiable, TerminalViewDeleg
 
     func send(source: TerminalView, data: ArraySlice<UInt8>) {
         if exited { restart(); return }
+        if ctrlArmed, data.count == 1 { sendKeys([data[data.startIndex]]); return }
         guard let handle else { return }
         data.withUnsafeBufferPointer { b in
             b.baseAddress?.withMemoryRebound(to: CChar.self, capacity: b.count) { lx_session_input(handle, $0, b.count) }

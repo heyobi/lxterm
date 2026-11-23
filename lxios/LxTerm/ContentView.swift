@@ -127,6 +127,10 @@ struct TabStrip: View {
                 }
                 .padding(.horizontal, 10)
             }
+            Button {
+                if let v = store.current?.view { _ = v.isFirstResponder ? v.resignFirstResponder() : v.becomeFirstResponder() }
+            } label: { Image(systemName: "keyboard") }
+                .accessibilityLabel(Text("Show or hide the keyboard"))
             Button { store.newSession() } label: { Image(systemName: "plus") }
                 .accessibilityLabel(Text("New shell"))
             Button { showSettings = true } label: { Image(systemName: "gearshape") }

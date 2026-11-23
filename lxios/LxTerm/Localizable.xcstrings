@@ -281,6 +281,26 @@
           }
         }
       }
+    },
+    "Hide keyboard": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Klavyeyi gizle"
+          }
+        }
+      }
+    },
+    "Show or hide the keyboard": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Klavyeyi göster ya da gizle"
+          }
+        }
+      }
     }
   }
 }
