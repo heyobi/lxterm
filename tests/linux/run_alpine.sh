@@ -17,7 +17,10 @@ check() {   # check NAME EXPECTED-SUBSTRING TIMEOUT PROGRAM ARGS...
     else
         echo "FAIL alpine: $name (rc=$rc, ${secs}s)"; fail=1
         printf '%s\n' "$out" | tail -n 15 | sed 's/^/     | /'
-        LXRUN_QUIET=1 timeout "$to" "$L" -t "$R" "$@" 2>&1 | grep -v '^\[sched\]' | tail -n 40 | sed 's/^/     t /'
+        LXRUN_QUIET=1 AOI_CHILD_TRACE=/tmp/lx-a-child.trace timeout "$to" "$L" -t "$R" "$@" > /tmp/lx-a.trace 2>&1
+        grep -v '^\[sched\]' /tmp/lx-a.trace | tail -n 25 | sed 's/^/     t /'
+        cat /tmp/lx-a.trace /tmp/lx-a-child.trace 2>/dev/null | grep -E '= -(22|38|95|1|13)$|not impl|ptmx|/dev/pts|\[tty\]|\[unix\]|stopped' | head -n 30 | sed 's/^/     e /'
+        rm -f /tmp/lx-a-child.trace
     fi
     printf '%s\n' "$out" | head -n 12 | sed 's/^/     > /'
 }
@@ -44,11 +47,27 @@ else
     echo "FAIL alpine: interactive sh, Ctrl-C (rc=$rc)"; fail=1
 fi
 printf '%s\n' "$out" | tail -n 12 | sed 's/^/     > /'
+# Job control: Ctrl-Z stops the job, jobs lists it, kill ends it.
+out="$(LXRUN_QUIET=1 LXRUN_KEYS='sleep 30\r\w\w\x1a\w\wjobs\r\wkill %1\r\wecho jc-done\r\wexit\r' timeout 60 "$L" -i "$R" /bin/sh -i 2>&1)"; rc=$?
+if printf '%s' "$out" | grep -qi "stopped" && printf '%s' "$out" | grep -q "jc-done"; then echo "OK   alpine: Ctrl-Z, jobs"
+else echo "FAIL alpine: Ctrl-Z, jobs (rc=$rc)"; fail=1; fi
+printf '%s\n' "$out" | tail -n 8 | sed 's/^/     > /'
+check "ps sees processes" "sleep"           20  /bin/sh -c 'sleep 3 & ps'
+check "top -bn1"         "Mem:"             20  /bin/sh -c 'top -bn1 | head -n 5'
+check "free"             "Mem:"             20  /usr/bin/free
+check "uptime"           "load average"     20  /usr/bin/uptime
+check "/proc/self/stat"  "R"                20  /bin/cat /proc/self/stat
 if [ "${2:-}" = net ]; then
     cp /etc/resolv.conf "$R/etc/resolv.conf" 2>/dev/null || echo "nameserver 1.1.1.1" > "$R/etc/resolv.conf"
     check "apk update"      "OK:"           300 /sbin/apk update
     check "apk add python3" "OK:"           600 /sbin/apk add python3
     check "python3"         "499999500000"  120 /usr/bin/python3 -c 'print(sum(range(10**6)))'
+    check "apk add tmux openssh" "OK:"       600 /sbin/apk add tmux openssh-client util-linux-misc
+    # (known gap: util-linux script prints the pty but does not exit after its child: not counted)
+    out="$(LXRUN_QUIET=1 timeout 20 "$L" "$R" /bin/sh -c 'script -qc tty /dev/null' 2>&1)"
+    echo "INFO alpine: script -qc tty -> $(printf '%s' "$out" | head -n 1)" 
+    check "tmux session"      "1 windows"    90  /bin/sh -c 'tmux new-session -d "sleep 30"; sleep 2; tmux ls; tmux kill-server'
+    check "ssh to github"     "Permission denied (publickey)" 90 /bin/sh -c 'ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -T git@github.com 2>&1; true'
     check "python3 script"  "sha256 ok"     120 /usr/bin/python3 -c 'import hashlib,json,os; h=hashlib.sha256(b"abc").hexdigest(); print("sha256", "ok" if h.startswith("ba7816bf") else h, json.dumps(os.uname().machine))'
 fi
 exit $fail

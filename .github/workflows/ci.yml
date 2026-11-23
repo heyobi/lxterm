@@ -51,7 +51,7 @@ jobs:
           APP=$(find build/dd -name LxTerm.app -path '*iphonesimulator*' | head -n 1)
           xcrun simctl install "$UDID" "$APP"
           mkdir -p shots
-          xcrun simctl launch "$UDID" com.heyobi.lxterm; sleep 3
+          xcrun simctl launch "$UDID" com.heyobi.lxterm -demo; sleep 3
           xcrun simctl io "$UDID" screenshot shots/1-unpacking.png
           sleep 40
           xcrun simctl io "$UDID" screenshot shots/2-shell.png

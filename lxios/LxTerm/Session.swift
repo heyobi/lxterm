@@ -67,10 +67,24 @@ final class Session: NSObject, ObservableObject, Identifiable, TerminalViewDeleg
             DispatchQueue.main.async { me.shellEnded() }
         }, ctx, &res)
         resumed = res != 0
+        if ProcessInfo.processInfo.arguments.contains("-demo"), !resumed { demo() }
         if resumed, !history.isEmpty {
             view.feed(byteArray: history[...])                // what it showed before
         } else {
             history.removeAll()
+        }
+    }
+
+    /// For screenshots (launch argument -demo): a few commands typed as a user would.
+    private func demo() {
+        let cmds = ["head -n 2 /etc/os-release\r", "uname -m\r", "python3 -c 'import sys; print(sys.version)'\r", "ls /\r"]
+        DispatchQueue.global().async { [weak self] in
+            Thread.sleep(forTimeInterval: 2)
+            for c in cmds {
+                guard let self, let h = self.handle else { return }
+                for ch in c.utf8 { var b = CChar(bitPattern: ch); lx_session_input(h, &b, 1); Thread.sleep(forTimeInterval: 0.03) }
+                Thread.sleep(forTimeInterval: 3)
+            }
         }
     }
 

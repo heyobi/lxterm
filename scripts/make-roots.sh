@@ -19,6 +19,7 @@ cat >> "$R/root/.bashrc" <<'EOF'
 export PS1='\[\e[1;32m\]\u@iphone\[\e[0m\]:\[\e[1;34m\]\w\[\e[0m\]\$ '
 alias ls='ls --color=auto'
 alias ll='ls -lah --color=auto'
+[ -z "$LXTERM_QUIET" ] && [ -r /etc/motd ] && cat /etc/motd && export LXTERM_QUIET=1
 EOF
 cat > "$R/etc/motd" <<'EOF'
 
