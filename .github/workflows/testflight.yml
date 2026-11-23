@@ -1,0 +1,145 @@
+# LxTerm → TestFlight: roots (arm64 Linux), App Store Connect checks, then a signed
+# build on macOS uploaded with altool. Same secrets and helper as the other heyobi apps.
+name: iOS → TestFlight
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: ['**.md', 'docs/**', '.gitignore']
+  workflow_dispatch:
+
+concurrency:
+  group: testflight
+  cancel-in-progress: false
+
+env:
+  TEAM_ID: U99V9TSK2X
+  BUNDLE_ID: com.heyobi.lxterm
+  PROFILE_NAME: LxTerm CI AppStore
+
+jobs:
+  roots:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq clang bc > /dev/null
+      - run: sh scripts/make-roots.sh
+      - uses: actions/upload-artifact@v4
+        with: { name: rootfs, path: 'rootfs-*.tar.gz', retention-days: 7 }
+
+  prepare:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      build_number: ${{ steps.build.outputs.build_number }}
+    env:
+      ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+      ASC_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - name: Check required secrets
+        env:
+          C: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          P: ${{ secrets.P12_PASSWORD }}
+          K: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          missing=""
+          for v in ASC_KEY_ID ASC_ISSUER_ID ASC_PRIVATE_KEY C P K; do eval "x=\${$v:-}"; [ -n "$x" ] || missing="$missing $v"; done
+          if [ -n "$missing" ]; then echo "::error::Missing repository secrets:$missing"; exit 1; fi
+      - name: Ensure bundle ID and app record
+        id: app
+        run: node scripts/asc.cjs ensure-app
+      - name: Next build number
+        id: build
+        run: node scripts/asc.cjs next-build-number "${{ steps.app.outputs.app_id }}" "${{ github.run_number }}"
+
+  build:
+    needs: [roots, prepare]
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
+      ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
+      ASC_PRIVATE_KEY: ${{ secrets.APP_STORE_CONNECT_PRIVATE_KEY }}
+      BUILD_NUMBER: ${{ needs.prepare.outputs.build_number }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: { node-version: 22 }
+      - uses: actions/download-artifact@v4
+        with: { name: rootfs }
+      - name: xterm.js (MIT, npm; integrity checked by npm)
+        run: |
+          mkdir -p xt && cd xt && npm pack --silent @xterm/xterm@5.5.0 @xterm/addon-fit@0.10.0
+          for t in *.tgz; do mkdir -p "${t%.tgz}" && tar -xzf "$t" -C "${t%.tgz}"; done
+      - name: Build
+        run: sh scripts/build-app.sh dev build/Payload/LxTerm.app "$BUILD_NUMBER"
+
+      - name: Install Apple Distribution certificate
+        id: cert
+        env:
+          BUILD_CERTIFICATE_BASE64: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
+          P12_PASSWORD: ${{ secrets.P12_PASSWORD }}
+          KEYCHAIN_PASSWORD: ${{ secrets.KEYCHAIN_PASSWORD }}
+        run: |
+          CERT_PATH="$RUNNER_TEMP/build_certificate.p12"
+          KEYCHAIN_PATH="$RUNNER_TEMP/app-signing.keychain-db"
+          node -e "
+            let raw = (process.env.BUILD_CERTIFICATE_BASE64 || '').trim();
+            raw = raw.replace(/^BUILD_CERTIFICATE_BASE64\s*=\s*/i, '').replace(/^[\"']|[\"']$/g, '').replace(/\s+/g, '');
+            require('fs').writeFileSync(process.argv[1], Buffer.from(raw, 'base64'));
+          " "$CERT_PATH"
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          CLEAN_PASS=$(printf '%s' "$P12_PASSWORD" | tr -d '\r\n')
+          security import "$CERT_PATH" -k "$KEYCHAIN_PATH" -P "$CLEAN_PASS" -f pkcs12 -T /usr/bin/codesign -T /usr/bin/security
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH" > /dev/null
+          security list-keychains -d user -s "$KEYCHAIN_PATH" $(security list-keychains -d user | tr -d '"')
+          security default-keychain -s "$KEYCHAIN_PATH"
+          rm -f "$CERT_PATH"
+          SERIAL=$(security find-certificate -a -c "Apple Distribution" -p "$KEYCHAIN_PATH" | openssl x509 -noout -serial | cut -d= -f2)
+          echo "serial=$SERIAL" >> "$GITHUB_OUTPUT"
+
+      - name: Create / fetch provisioning profile
+        id: profile
+        run: node scripts/asc.cjs profile "${{ steps.cert.outputs.serial }}" "$PROFILE_NAME"
+
+      - name: Sign
+        env:
+          PROFILE_UUID: ${{ steps.profile.outputs.profile_uuid }}
+        run: |
+          set -eu
+          APP=build/Payload/LxTerm.app
+          PROF="$HOME/Library/MobileDevice/Provisioning Profiles/$PROFILE_UUID.mobileprovision"
+          cp "$PROF" "$APP/embedded.mobileprovision"
+          security cms -D -i "$PROF" > "$RUNNER_TEMP/prof.plist"
+          /usr/libexec/PlistBuddy -x -c "Print :Entitlements" "$RUNNER_TEMP/prof.plist" > "$RUNNER_TEMP/ent.plist"
+          cat "$RUNNER_TEMP/ent.plist"
+          codesign --force --sign "Apple Distribution" --entitlements "$RUNNER_TEMP/ent.plist" --generate-entitlement-der "$APP"
+          codesign --verify --deep --strict "$APP"
+          (cd build && zip -qry LxTerm.ipa Payload)
+          ls -lh build/LxTerm.ipa
+
+      - name: Upload to App Store Connect (TestFlight)
+        run: |
+          node -e "
+            const fs = require('fs'), path = require('path'), os = require('os');
+            let raw = (process.env.ASC_PRIVATE_KEY || '').trim().replace(/^[\"']|[\"']$/g, '');
+            raw = raw.replace(/\\\\n/g, '\n').trim() + '\n';
+            const d = path.join(os.homedir(), '.appstoreconnect', 'private_keys');
+            fs.mkdirSync(d, { recursive: true });
+            fs.writeFileSync(path.join(d, 'AuthKey_' + process.env.ASC_KEY_ID + '.p8'), raw);
+          "
+          xcrun altool --upload-app -f build/LxTerm.ipa -t ios --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID" --show-progress
+          echo "### Build $BUILD_NUMBER uploaded to App Store Connect" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Clean up keychain and key
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/app-signing.keychain-db" 2>/dev/null || true
+          rm -rf ~/.appstoreconnect/private_keys

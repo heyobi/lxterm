@@ -1,0 +1,4555 @@
+/* Linux/arm64 process: execve-style loader and the syscall layer (see proc.h).
+ *
+ * Numbers, flags and structure layouts below are Linux arm64's (asm-generic).
+ * The host may be Linux or Darwin, so every value crossing the boundary is
+ * translated: open flags, errno, struct stat, dirents. */
+#define _GNU_SOURCE
+#define _DARWIN_C_SOURCE
+#include "proc.h"
+#include "binder.h"
+#include "hle.h"
+#include "gpu.h"
+#include "gralloc.h"
+#include "tty.h"
+
+#include <dirent.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <limits.h>
+#include <pthread.h>
+#include <stdlib.h>
+#include <string.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <netinet/tcp.h>
+#include <poll.h>
+#include <signal.h>
+#include <sys/ioctl.h>
+#include <sys/socket.h>
+#include <sys/stat.h>
+#include <sys/time.h>
+#include <sys/uio.h>
+#include <time.h>
+#include <unistd.h>
+
+/* 128 GiB of guest addresses (reserved, not committed): scudo alone reserves
+ * 8+ GiB up front, Chromium's PartitionAlloc two 16 GiB pools and V8's sandbox
+ * 8 GiB more, 4 GiB-aligned (WebView; 64 GiB had no room left for it). Mappings
+ * without an address hint go above 4 GiB, as on a real kernel, which leaves the
+ * low 4 GiB to requests that ask for it (ART's heap, whose 32-bit references must
+ * point below 4 GiB). */
+#define GUEST_SPACE (128ULL << 30)
+#define HIGH_START  (4ULL << 30)
+#define SHARED_PAGE 0x4000u                     /* core/vm.c's host page: shared file mappings */
+#define IS_ERR(v)   ((v) >= (uint64_t)-4096)
+#define STACK_TOP   (GUEST_SPACE - (1ULL << 30))
+#define SIGTRAMP    STACK_TOP                   /* one page: rt_sigreturn, the vDSO's role */
+#define STACK_SIZE  (8ULL << 20)
+#define PAGE        AOI_VM_PAGE
+#define GUEST_PID   1000
+#define PID(p)      ((p)->pid ? (p)->pid : GUEST_PID)
+#define AOI_ARGS    4096                        /* argv / envp entries an execve takes */
+
+static int lx_newpid(void);                     /* Linux mode: processes (see lx_fork) */
+static int lx_take(struct aoi_proc *p);
+static void lx_unregister(struct aoi_proc *p);
+static void lx_register(struct aoi_proc *p);
+
+/* A vfork()ed child running in its parent until its execve (see vfork_start). */
+struct aoi_vfork {
+    int thread, pid;
+    int pgid;                                   /* Linux mode: the child's setpgid before its execve */
+    uint64_t sigact[65][4];                     /* the parent's handlers: the child's changes are its own */
+    char cwd[AOI_PATH];                         /* and its chdir (posix_spawn's file actions) */
+    struct aoi_cpu cpu;                         /* the parent at its svc */
+    uint64_t sigmask;
+    struct aoi_proc_fd fd[AOI_PROC_FDS];        /* the parent's fd table */
+};
+
+static uint64_t up(uint64_t v, uint64_t a) { return (v + a - 1) & ~(a - 1); }
+static uint64_t down(uint64_t v, uint64_t a) { return v & ~(a - 1); }
+
+/* ---------- errno, Linux values ---------- */
+
+enum { L_EPERM = 1, L_ENOENT = 2, L_ESRCH = 3, L_EINTR = 4, L_EIO = 5, L_EBADF = 9, L_ECHILD = 10,
+       L_EAGAIN = 11, L_ENOMEM = 12, L_EACCES = 13, L_EFAULT = 14, L_EBUSY = 16, L_EEXIST = 17,
+       L_EXDEV = 18, L_ENOTDIR = 20, L_EISDIR = 21, L_EINVAL = 22, L_ENFILE = 23, L_EMFILE = 24,
+       L_E2BIG = 7, L_ENOEXEC = 8, L_ENOTTY = 25, L_EFBIG = 27, L_ENOSPC = 28, L_ESPIPE = 29, L_EROFS = 30, L_EPIPE = 32,
+       L_ERANGE = 34, L_ENAMETOOLONG = 36, L_ENOSYS = 38, L_ENOTEMPTY = 39, L_ELOOP = 40,
+       L_ENODATA = 61, L_EOVERFLOW = 75, L_ENOTSOCK = 88, L_ENOTSUP = 95, L_EAFNOSUPPORT = 97,
+       L_ENOTCONN = 107, L_ETIMEDOUT = 110, L_ECONNREFUSED = 111,
+       L_EDESTADDRREQ = 89, L_EMSGSIZE = 90, L_EPROTOTYPE = 91, L_ENOPROTOOPT = 92, L_EPROTONOSUPPORT = 93,
+       L_EADDRINUSE = 98, L_EADDRNOTAVAIL = 99, L_ENETDOWN = 100, L_ENETUNREACH = 101, L_ECONNABORTED = 103,
+       L_ECONNRESET = 104, L_ENOBUFS = 105, L_EISCONN = 106, L_EHOSTUNREACH = 113, L_EALREADY = 114,
+       L_EINPROGRESS = 115 };
+
+static int lx_errno(int e)
+{
+    switch (e) {
+    case EPERM: return L_EPERM;       case ENOENT: return L_ENOENT;   case ESRCH: return L_ESRCH;
+    case EINTR: return L_EINTR;       case EIO: return L_EIO;         case EBADF: return L_EBADF;
+    case ECHILD: return L_ECHILD;     case EAGAIN: return L_EAGAIN;   case ENOMEM: return L_ENOMEM;
+    case EACCES: return L_EACCES;     case EFAULT: return L_EFAULT;   case EBUSY: return L_EBUSY;
+    case EEXIST: return L_EEXIST;     case EXDEV: return L_EXDEV;     case ENOTDIR: return L_ENOTDIR;
+    case EISDIR: return L_EISDIR;     case EINVAL: return L_EINVAL;   case ENFILE: return L_ENFILE;
+    case EMFILE: return L_EMFILE;     case ENOTTY: return L_ENOTTY;   case EFBIG: return L_EFBIG;
+    case ENOSPC: return L_ENOSPC;     case ESPIPE: return L_ESPIPE;   case EROFS: return L_EROFS;
+    case EPIPE: return L_EPIPE;       case ERANGE: return L_ERANGE;   case ENAMETOOLONG: return L_ENAMETOOLONG;
+    case ENOSYS: return L_ENOSYS;     case ENOTEMPTY: return L_ENOTEMPTY; case ELOOP: return L_ELOOP;
+    case EOVERFLOW: return L_EOVERFLOW; case ETIMEDOUT: return L_ETIMEDOUT;
+    case ENOTSOCK: return L_ENOTSOCK; case ENOTCONN: return L_ENOTCONN; case ECONNREFUSED: return L_ECONNREFUSED;
+    case EAFNOSUPPORT: return L_EAFNOSUPPORT; case EDESTADDRREQ: return L_EDESTADDRREQ;
+    case EMSGSIZE: return L_EMSGSIZE; case EPROTOTYPE: return L_EPROTOTYPE; case ENOPROTOOPT: return L_ENOPROTOOPT;
+    case EPROTONOSUPPORT: return L_EPROTONOSUPPORT; case EADDRINUSE: return L_EADDRINUSE;
+    case EADDRNOTAVAIL: return L_EADDRNOTAVAIL; case ENETDOWN: return L_ENETDOWN;
+    case ENETUNREACH: return L_ENETUNREACH; case ECONNABORTED: return L_ECONNABORTED;
+    case ECONNRESET: return L_ECONNRESET; case ENOBUFS: return L_ENOBUFS; case EISCONN: return L_EISCONN;
+    case EHOSTUNREACH: return L_EHOSTUNREACH; case EALREADY: return L_EALREADY;
+    case EINPROGRESS: return L_EINPROGRESS; case ENOTSUP: return L_ENOTSUP;
+    default: return L_EIO;
+    }
+}
+
+static uint64_t err(int linux_errno) { return (uint64_t)-(int64_t)linux_errno; }
+static uint64_t herr(void) { return err(lx_errno(errno)); }
+
+/* ---------- guest memory ---------- */
+
+static uint8_t *gp(struct aoi_proc *p, uint64_t a, uint64_t len, int need)
+{
+    a &= 0x00ffffffffffffffULL;                                    /* tagged pointers, as the kernel untags */
+    return aoi_vm_ptr(&p->vm, a, len ? len : 1, need);
+}
+
+/* Copies a NUL-terminated guest string; NULL if unmapped or too long. */
+static const char *gstr(struct aoi_proc *p, uint64_t a, char *buf, size_t n)
+{
+    size_t i;
+    for (i = 0; i < n; i++) {
+        uint8_t *c = gp(p, a + i, 1, AOI_PROT_R);
+        if (!c) return NULL;
+        buf[i] = (char)*c;
+        if (!*c) return buf;
+    }
+    return NULL;
+}
+
+/* Copies to / from guest memory; the space is sparse, so ranges may span chunks. */
+/* ---------- userfaultfd (SIGBUS mode) ----------
+ * A page becomes missing when MREMAP_DONTUNMAP moves its bytes away or madvise
+ * zaps it inside a registered range. Touching a missing page in a registered
+ * range is the guest's SIGBUS (ART's CMC GC then compacts into it with
+ * UFFDIO_COPY); anywhere else it is simply zero-filled, as the kernel would. */
+static int uffd_watched(struct aoi_proc *p, uint64_t a)
+{
+    int i;
+    for (i = 0; i < p->nuffd_reg; i++)
+        if (a - p->uffd_reg[i].start < p->uffd_reg[i].len) return 1;
+    return 0;
+}
+
+/* Zero-fills the unwatched missing pages of a range. 1 if there were any. */
+static int uffd_fill(struct aoi_proc *p, uint64_t a, uint64_t n)
+{
+    uint64_t q;
+    int any = 0;
+    if (a + n < a || a + n > p->vm.size) return 0;
+    for (q = a & ~(uint64_t)(AOI_VM_PAGE - 1); q < a + n; q += AOI_VM_PAGE)
+        if ((p->vm.prot[q / AOI_VM_PAGE] & AOI_PROT_MISSING) && !uffd_watched(p, q)) {
+            aoi_vm_set_missing(&p->vm, q, AOI_VM_PAGE, 0);
+            any = 1;
+        }
+    return any;
+}
+
+static int all_zero(const uint8_t *b, size_t n)
+{
+    size_t i;
+    for (i = 0; i < n; i += 8) { uint64_t v; memcpy(&v, b + i, 8); if (v) return 0; }
+    return 1;
+}
+
+extern int64_t aoi_mono_offset;
+/* Deterministic mode (experiment): AOI_SEED=n fixes every source of randomness
+ * and derives time from the instruction count (10 ns per guest instruction). */
+static int det_on = -1;
+static uint64_t det_state;
+static const volatile uint64_t *det_steps;
+static int64_t det_skew;                        /* virtual ns added while all threads sleep */
+static int det(void)
+{
+    if (det_on < 0) { const char *e = getenv("AOI_SEED"); det_on = e != NULL; det_state = e ? strtoull(e, NULL, 0) : 0; }
+    return det_on;
+}
+static uint64_t det_next(void)                  /* splitmix64 */
+{
+    uint64_t z = (det_state += 0x9e3779b97f4a7c15ull);
+    z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ull; z = (z ^ (z >> 27)) * 0x94d049bb133111ebull;
+    return z ^ (z >> 31);
+}
+static void det_fill(uint8_t *b, size_t n) { size_t i; for (i = 0; i < n; i++) b[i] = (uint8_t)det_next(); }
+static int64_t det_ns(void) { return 1000000000ll + (int64_t)(det_steps ? *det_steps : 0) * 10 + det_skew; }
+
+static int put(struct aoi_proc *p, uint64_t a, const void *src, uint64_t n)
+{
+    a &= 0x00ffffffffffffffULL;
+    return !n || aoi_vm_write(&p->vm, a, src, n, AOI_PROT_W)
+        || (uffd_fill(p, a, n) && aoi_vm_write(&p->vm, a, src, n, AOI_PROT_W));
+}
+
+static int get(struct aoi_proc *p, uint64_t a, void *dst, uint64_t n)
+{
+    a &= 0x00ffffffffffffffULL;
+    return !n || aoi_vm_read(&p->vm, a, dst, n, AOI_PROT_R)
+        || (uffd_fill(p, a, n) && aoi_vm_read(&p->vm, a, dst, n, AOI_PROT_R));
+}
+
+/* Host read()/write() (pread/pwrite when off >= 0) straight into / out of guest
+ * memory, one chunk-contiguous span at a time. Bytes moved, or a Linux -errno. */
+static int64_t xfer(struct aoi_proc *p, int host, uint64_t a, uint64_t len, int to_guest, int64_t off)
+{
+    uint64_t done = 0, n;
+    a &= 0x00ffffffffffffffULL;
+    while (done < len) {
+        uint8_t *b = aoi_vm_span(&p->vm, a + done, len - done, to_guest ? AOI_PROT_W : AOI_PROT_R, &n);
+        ssize_t k;
+        if (!b) return done ? (int64_t)done : -L_EFAULT;
+        if (to_guest) k = off < 0 ? read(host, b, (size_t)n) : pread(host, b, (size_t)n, (off_t)(off + (int64_t)done));
+        else k = off < 0 ? write(host, b, (size_t)n) : pwrite(host, b, (size_t)n, (off_t)(off + (int64_t)done));
+        if (k < 0) return done ? (int64_t)done : -lx_errno(errno);
+        done += (uint64_t)k;
+        if ((uint64_t)k < n) break;
+    }
+    return (int64_t)done;
+}
+
+/* Every page of the range is mapped (any protection). */
+static int mapped(struct aoi_proc *p, uint64_t a, uint64_t len)
+{
+    uint64_t q;
+    if (a + len < a || a + len > p->vm.size) return 0;
+    for (q = a & ~(uint64_t)(PAGE - 1); q < a + len; q += PAGE)
+        if (!p->vm.prot[q / PAGE]) return 0;
+    return 1;
+}
+
+/* ---------- paths: guest path -> host path inside root ---------- */
+
+/* dst = a + b, at most n bytes with the NUL; 0 if it does not fit. */
+static int join(char *dst, size_t n, const char *a, const char *b)
+{
+    size_t la = strlen(a), lb = strlen(b);
+    if (la + lb + 1 > n) return 0;
+    memmove(dst + la, b, lb + 1);
+    memmove(dst, a, la);
+    return 1;
+}
+
+static void host_path(struct aoi_proc *p, const char *guest, char *out)
+{
+    if (p->data[0] && !strncmp(guest, "/data", 5) && (!guest[5] || guest[5] == '/')) {
+        if (!join(out, AOI_PATH, p->data, guest + 5)) out[0] = 0;
+        return;
+    }
+    if (!join(out, AOI_PATH, p->root, guest)) out[0] = 0;
+}
+
+/* Host devices passed straight through. */
+static int is_passthrough(const char *g)
+{
+    return !strcmp(g, "/dev/null") || !strcmp(g, "/dev/zero") || !strcmp(g, "/dev/urandom") ||
+           !strcmp(g, "/dev/random") || !strcmp(g, "/dev/tty");
+}
+
+/* Normalises `path` (relative to the guest directory `base`) into an absolute
+ * guest path, following symlinks inside the root; the last component is
+ * followed only if `follow`. Returns 0 or a Linux errno. */
+static int resolve(struct aoi_proc *p, const char *base, const char *path, int follow, char *out)
+{
+    char work[AOI_PATH * 2], cur[AOI_PATH], hp[AOI_PATH], link[AOI_PATH];
+    int links = 0;
+    size_t cl;
+
+    if (!*path) return L_ENOENT;
+    if (path[0] == '/') { if (!join(work, sizeof work, "", path)) return L_ENAMETOOLONG; }
+    else {
+        char b2[AOI_PATH + 1];
+        if (!join(b2, sizeof b2, base, "/") || !join(work, sizeof work, b2, path)) return L_ENAMETOOLONG;
+    }
+    cur[0] = 0; cl = 0;
+    for (;;) {
+        char *s = work, *comp, *rest;
+        while (*s == '/') s++;
+        if (!*s) break;
+        comp = s;
+        while (*s && *s != '/') s++;
+        rest = s;
+        {
+            size_t n = (size_t)(rest - comp);
+            int last;
+            char *r = rest;
+            while (*r == '/') r++;
+            last = !*r;
+            if (n == 1 && comp[0] == '.') { memmove(work, rest, strlen(rest) + 1); continue; }
+            if (n == 2 && comp[0] == '.' && comp[1] == '.') {
+                while (cl && cur[cl - 1] != '/') cl--;
+                if (cl) cl--;
+                cur[cl] = 0;
+                memmove(work, rest, strlen(rest) + 1);
+                continue;
+            }
+            if (cl + 1 + n >= AOI_PATH) return L_ENAMETOOLONG;
+            cur[cl++] = '/';
+            memcpy(cur + cl, comp, n);
+            cl += n;
+            cur[cl] = 0;
+            memmove(work, rest, strlen(rest) + 1);
+            if (last && !follow) break;
+            if (!strcmp(cur, "/proc/self/exe") || !strcmp(cur, "/proc/self/fd")) continue;
+            host_path(p, cur, hp);
+            {
+                struct stat st;
+                ssize_t k;
+                if (lstat(hp, &st) != 0 || !S_ISLNK(st.st_mode)) continue;
+                if (++links > 40) return L_ELOOP;
+                if ((k = readlink(hp, link, sizeof link - 1)) < 0) return lx_errno(errno);
+                link[k] = 0;
+                {
+                    char tmp[AOI_PATH * 2];
+                    if (!join(tmp, sizeof tmp, link, "/") || !join(work, sizeof work, tmp, work))
+                        return L_ENAMETOOLONG;
+                }
+                if (link[0] == '/') { cl = 0; cur[0] = 0; }
+                else { while (cl && cur[cl - 1] != '/') cl--; if (cl) cl--; cur[cl] = 0; }
+            }
+        }
+    }
+    if (!cl) { cur[0] = '/'; cur[1] = 0; }
+    memcpy(out, cur, cl + 2 > AOI_PATH ? AOI_PATH : cl + 2);
+    return 0;
+}
+
+/* dirfd + path -> resolved guest path. */
+static int at_path(struct aoi_proc *p, int64_t dirfd, uint64_t upath, int follow, char *out)
+{
+    char path[AOI_PATH];
+    const char *base = p->cwd;
+    if (!gstr(p, upath, path, sizeof path)) return L_EFAULT;
+    if (path[0] != '/' && dirfd != -100) {                 /* not AT_FDCWD */
+        if (dirfd < 0 || dirfd >= AOI_PROC_FDS || !p->fd[dirfd].used) return L_EBADF;
+        base = p->fd[dirfd].path;
+    }
+    return resolve(p, base, path, follow, out);
+}
+
+/* The host path for a resolved guest path (devices pass through). */
+static void to_host(struct aoi_proc *p, const char *g, char *out)
+{
+    if (is_passthrough(g)) join(out, AOI_PATH, "", g);
+    else host_path(p, g, out);
+}
+
+/* ---------- file descriptors ---------- */
+
+static int fd_new(struct aoi_proc *p, int host, const char *path, int min)
+{
+    int i;
+    for (i = min; i < AOI_PROC_FDS; i++)
+        if (!p->fd[i].used) {
+            p->fd[i].used = 1; p->fd[i].host = host; p->fd[i].dir = NULL; p->fd[i].kind = AOI_FD_FILE;
+            p->fd[i].nonblock = 0; p->fd[i].count = 0; p->fd[i].sem = 0; p->fd[i].ep = NULL;
+            p->fd[i].pair = p->fd[i].end = p->fd[i].ptype = p->fd[i].seals = p->fd[i].evid = p->fd[i].cloexec = 0;
+            if (p->fd[i].path != path) join(p->fd[i].path, AOI_PATH, "", path);
+            return i;
+        }
+    return -1;
+}
+
+/* An eventfd's counter: shared by its fds (aoi_proc.ev), or the fd's own. */
+static uint64_t *ev_count(struct aoi_proc *p, struct aoi_proc_fd *f)
+{
+    return f->evid > 0 && f->evid < AOI_PROC_EVFDS ? &p->ev[f->evid].count : &f->count;
+}
+
+static int ev_sem(struct aoi_proc *p, struct aoi_proc_fd *f)
+{
+    return f->evid > 0 && f->evid < AOI_PROC_EVFDS ? p->ev[f->evid].sem : f->sem;
+}
+
+static void ev_ref(struct aoi_proc *p, struct aoi_proc_fd *f, int d)
+{
+    if (f->evid > 0 && f->evid < AOI_PROC_EVFDS && (p->ev[f->evid].refs += d) < 0) p->ev[f->evid].refs = 0;
+}
+
+static int proc_file(struct aoi_proc *p, const char *g);
+
+void aoi_proc_host_path(struct aoi_proc *p, const char *guest, char *out) { to_host(p, guest, out); }
+
+int aoi_proc_open_host(struct aoi_proc *p, const char *guest, int flags)
+{
+    char h[AOI_PATH];
+    if (!strncmp(guest, "/proc/", 6)) return proc_file(p, guest);
+    to_host(p, guest, h);
+    return h[0] ? open(h, flags | O_CLOEXEC) : -1;
+}
+
+int aoi_proc_pair(struct aoi_proc *p, int a, int b, int ptype)
+{
+    int id = ++p->next_pair;
+    if (a >= 0) { p->fd[a].pair = id; p->fd[a].end = 0; p->fd[a].ptype = ptype; }
+    if (b >= 0) { p->fd[b].pair = id; p->fd[b].end = 1; p->fd[b].ptype = ptype; }
+    return id;
+}
+
+int aoi_proc_fd_install(struct aoi_proc *p, int host, const char *path, int kind)
+{
+    int n = fd_new(p, host, path, 0);
+    if (n >= 0) p->fd[n].kind = kind;
+    return n;
+}
+
+int aoi_proc_memfd(struct aoi_proc *p, const char *name, uint64_t size)
+{
+    char g[AOI_PATH], h[AOI_PATH];
+    int d, n;
+    snprintf(g, sizeof g, "/data/local/tmp/.memfd-XXXXXX");
+    aoi_proc_host_path(p, g, h);
+    if (!h[0] || (d = mkstemp(h)) < 0) return -1;
+    unlink(h);
+    fcntl(d, F_SETFD, FD_CLOEXEC);
+    if (ftruncate(d, (off_t)size)) { close(d); return -1; }
+    snprintf(g, sizeof g, "memfd:%s", name);
+    if ((n = fd_new(p, d, g, 0)) < 0) { close(d); return -1; }
+    p->fd[n].seals = 1;                                            /* F_SEAL_SEAL, as without MFD_ALLOW_SEALING */
+    return n;
+}
+
+int aoi_proc_host_fd(struct aoi_proc *p, int fd) { return fd >= 0 && fd < AOI_PROC_FDS && p->fd[fd].used ? p->fd[fd].host : -1; }
+
+static int futex_wake(struct aoi_proc *p, uint64_t addr, int n, uint32_t bitset);
+int aoi_proc_futex_wake(struct aoi_proc *p, uint64_t addr, int n) { return futex_wake(p, addr, n, ~0u); }
+
+static struct aoi_proc_fd *fd_get(struct aoi_proc *p, uint64_t fd)
+{
+    return fd < AOI_PROC_FDS && p->fd[fd].used ? &p->fd[fd] : NULL;
+}
+
+static int host_oflags(uint64_t f)
+{
+    int h = (int)(f & 3);
+    if (f & 0100) h |= O_CREAT;
+    if (f & 0200) h |= O_EXCL;
+    if (f & 0400) h |= O_NOCTTY;
+    if (f & 01000) h |= O_TRUNC;
+    if (f & 02000) h |= O_APPEND;
+    if (f & 04000) h |= O_NONBLOCK;
+    if (f & 040000) h |= O_DIRECTORY;
+    if (f & 0100000) h |= O_NOFOLLOW;
+    if (f & 02000000) h |= O_CLOEXEC;
+    return h;
+}
+
+/* struct stat, Linux arm64 layout (128 bytes). */
+/* Who owns a guest file, as on a device: the app its own data, root the rest -
+ * bionic only maps a property area owned by root, and ART (as an app) refuses a dex
+ * file the app could write: the APK in /data/app and aoi.dex are not the app's. */
+static uint32_t owner(const struct aoi_proc *p, const char *g)
+{
+    static const char *const mine[] = { "/data/data/", "/data/user/", "/data/user_de/", "/data/media/",
+                                        "/data/misc/profiles/", NULL };
+    int i;
+    if (p->linux_mode) return 0;
+    for (i = 0; mine[i]; i++)
+        if (!strncmp(g, mine[i], strlen(mine[i]))) return p->uid;
+    return 0;
+}
+
+static void lx_stat(const struct stat *st, uint8_t *o, uint32_t uid)
+{
+    uint64_t v;
+    uint32_t w;
+    int64_t sv;
+    memset(o, 0, 128);
+    v = (uint64_t)st->st_dev; memcpy(o + 0, &v, 8);
+    v = (uint64_t)st->st_ino; memcpy(o + 8, &v, 8);
+    w = (uint32_t)st->st_mode; memcpy(o + 16, &w, 4);
+    w = (uint32_t)st->st_nlink; memcpy(o + 20, &w, 4);
+    w = uid; memcpy(o + 24, &w, 4); memcpy(o + 28, &w, 4);     /* uid, gid: the process's (its files) */
+    v = (uint64_t)st->st_rdev; memcpy(o + 32, &v, 8);
+    sv = (int64_t)st->st_size; memcpy(o + 48, &sv, 8);
+    w = (uint32_t)st->st_blksize; memcpy(o + 56, &w, 4);
+    sv = (int64_t)st->st_blocks; memcpy(o + 64, &sv, 8);
+#ifdef __APPLE__
+    sv = st->st_atimespec.tv_sec; memcpy(o + 72, &sv, 8); v = (uint64_t)st->st_atimespec.tv_nsec; memcpy(o + 80, &v, 8);
+    sv = st->st_mtimespec.tv_sec; memcpy(o + 88, &sv, 8); v = (uint64_t)st->st_mtimespec.tv_nsec; memcpy(o + 96, &v, 8);
+    sv = st->st_ctimespec.tv_sec; memcpy(o + 104, &sv, 8); v = (uint64_t)st->st_ctimespec.tv_nsec; memcpy(o + 112, &v, 8);
+#else
+    sv = st->st_atim.tv_sec; memcpy(o + 72, &sv, 8); v = (uint64_t)st->st_atim.tv_nsec; memcpy(o + 80, &v, 8);
+    sv = st->st_mtim.tv_sec; memcpy(o + 88, &sv, 8); v = (uint64_t)st->st_mtim.tv_nsec; memcpy(o + 96, &v, 8);
+    sv = st->st_ctim.tv_sec; memcpy(o + 104, &sv, 8); v = (uint64_t)st->st_ctim.tv_nsec; memcpy(o + 112, &v, 8);
+#endif
+}
+
+static void note_map(struct aoi_proc *p, uint64_t start, uint64_t len, uint64_t off, const char *path);
+static void shm_sync(struct aoi_proc *p, uint64_t a, uint64_t len, int drop);
+
+/* ---------- ELF loading (execve) ---------- */
+
+struct loaded { uint64_t bias, entry, phdr, phnum, lo, hi; char interp[AOI_PATH]; };
+
+static uint16_t u16(const uint8_t *b) { return (uint16_t)(b[0] | b[1] << 8); }
+static uint32_t u32(const uint8_t *b) { return (uint32_t)u16(b) | (uint32_t)u16(b + 2) << 16; }
+static uint64_t u64(const uint8_t *b) { return (uint64_t)u32(b) | (uint64_t)u32(b + 4) << 32; }
+
+static void *slurp(const char *path, size_t *size)
+{
+    FILE *f = fopen(path, "rb");
+    void *buf = NULL;
+    long n;
+    if (!f) return NULL;
+    if (fseek(f, 0, SEEK_END) == 0 && (n = ftell(f)) > 0 && fseek(f, 0, SEEK_SET) == 0 &&
+        (buf = malloc((size_t)n)) && fread(buf, 1, (size_t)n, f) != (size_t)n) { free(buf); buf = NULL; }
+    if (buf) *size = (size_t)n;
+    fclose(f);
+    return buf;
+}
+
+static const char *load_elf(struct aoi_proc *p, const char *guest, struct loaded *L)
+{
+    char hp[AOI_PATH], g[AOI_PATH];
+    size_t size = 0;
+    uint8_t *f;
+    uint64_t phoff, i, lo = ~0ULL, hi = 0, base;
+    unsigned phnum, phentsize;
+    int type, rc;
+
+    memset(L, 0, sizeof *L);
+    if ((rc = resolve(p, "/", guest, 1, g))) return "cannot resolve program path";
+    host_path(p, g, hp);
+    if (!(f = slurp(hp, &size))) return "cannot read program";
+    if (size < 64 || memcmp(f, "\177ELF\2\1", 6) || u16(f + 18) != 183) { free(f); return "not an ELF64 AArch64 file"; }
+    type = u16(f + 16);
+    phoff = u64(f + 32); phentsize = u16(f + 54); phnum = u16(f + 56);
+    if (phentsize != 56 || phoff + (uint64_t)phnum * 56 > size) { free(f); return "bad program headers"; }
+    for (i = 0; i < phnum; i++) {
+        const uint8_t *ph = f + phoff + i * 56;
+        if (u32(ph) == 1) {                                        /* PT_LOAD */
+            uint64_t va = u64(ph + 16), msz = u64(ph + 40);
+            if (down(va, PAGE) < lo) lo = down(va, PAGE);
+            if (up(va + msz, PAGE) > hi) hi = up(va + msz, PAGE);
+        } else if (u32(ph) == 3) {                                 /* PT_INTERP */
+            uint64_t off = u64(ph + 8), fsz = u64(ph + 32);
+            if (off + fsz > size || fsz >= AOI_PATH) { free(f); return "bad PT_INTERP"; }
+            memcpy(L->interp, f + off, fsz); L->interp[fsz] = 0;
+        }
+    }
+    if (hi <= lo) { free(f); return "no PT_LOAD"; }
+    if (type == 3) {                                               /* ET_DYN: anywhere free */
+        base = aoi_vm_map(&p->vm, 0, hi - lo, 0, 0);
+        if (IS_ERR(base)) { free(f); return "no address space for program"; }
+        L->bias = base - lo;
+    } else {
+        L->bias = 0;
+        if (IS_ERR(aoi_vm_map(&p->vm, lo, hi - lo, 0, 1))) { free(f); return "ET_EXEC outside the guest space"; }
+    }
+    /* map the whole span writable, copy every segment, then apply page protections */
+    aoi_vm_map(&p->vm, lo + L->bias, hi - lo, AOI_PROT_R | AOI_PROT_W, 1);
+    {
+        uint8_t *prot = calloc((size_t)((hi - lo) / PAGE), 1);
+        if (!prot) { free(f); return "out of memory"; }
+        for (i = 0; i < phnum; i++) {
+            const uint8_t *ph = f + phoff + i * 56;
+            uint64_t off, va, fsz, msz, a;
+            uint32_t fl;
+            int pr;
+            if (u32(ph) != 1) continue;
+            fl = u32(ph + 4); off = u64(ph + 8); va = u64(ph + 16); fsz = u64(ph + 32); msz = u64(ph + 40);
+            if (off + fsz > size || fsz > msz) { free(prot); free(f); return "bad PT_LOAD"; }
+            put(p, va + L->bias, f + off, fsz);
+            pr = (fl & 4 ? AOI_PROT_R : 0) | (fl & 2 ? AOI_PROT_W : 0) | (fl & 1 ? AOI_PROT_X : 0);
+            for (a = down(va, PAGE); a < up(va + msz, PAGE); a += PAGE) prot[(a - lo) / PAGE] |= (uint8_t)pr;
+            if (off == 0 || (phoff >= off && phoff < off + fsz)) L->phdr = va + (phoff - off) + L->bias;
+        }
+        for (i = 0; i < (hi - lo) / PAGE; i++) aoi_vm_protect(&p->vm, lo + L->bias + i * PAGE, PAGE, prot[i]);
+        free(prot);
+    }
+    for (i = 0; i < phnum; i++) {
+        const uint8_t *ph = f + phoff + i * 56;
+        if (u32(ph) == 6) L->phdr = u64(ph + 16) + L->bias;       /* PT_PHDR */
+    }
+    L->entry = u64(f + 24) + L->bias;
+    note_map(p, lo + L->bias, hi - lo, lo, g);
+    L->phnum = phnum;
+    L->lo = lo + L->bias; L->hi = hi + L->bias;
+    free(f);
+    return NULL;
+}
+
+/* Pushes a string onto the guest stack (growing down) and returns its address. */
+static uint64_t push_str(struct aoi_proc *p, uint64_t *sp, const char *s)
+{
+    size_t n = strlen(s) + 1;
+    *sp -= n;
+    put(p, *sp, s, n);
+    return *sp;
+}
+
+enum { AT_NULL = 0, AT_PHDR = 3, AT_PHENT = 4, AT_PHNUM = 5, AT_PAGESZ = 6, AT_BASE = 7, AT_FLAGS = 8,
+       AT_ENTRY = 9, AT_UID = 11, AT_EUID = 12, AT_GID = 13, AT_EGID = 14, AT_PLATFORM = 15,
+       AT_HWCAP = 16, AT_CLKTCK = 17, AT_SECURE = 23, AT_RANDOM = 25, AT_HWCAP2 = 26, AT_EXECFN = 31 };
+
+/* What the interpreter implements: FP, ASIMD, CRC32, LSE atomics. No crypto, no FP16. */
+#define GUEST_HWCAP ((1u << 0) | (1u << 1) | (1u << 7) | (1u << 8))
+
+uint64_t aoi_proc_syscall(struct aoi_cpu *c);
+
+const char *aoi_proc_exec(struct aoi_proc *p, const char *root, const char *path,
+                          int argc, const char *const *argv, const char *const *envp)
+{
+    struct loaded prog, interp;
+    const char *e;
+    uint64_t sp, argp[AOI_ARGS], envp_a[AOI_ARGS], execfn, platform, rnd, *v, words[2 * AOI_ARGS + 64];
+    int envc = 0, i, n = 0;
+    uint8_t random16[16];
+
+    memset(p, 0, sizeof *p);
+    signal(SIGPIPE, SIG_IGN);                                      /* a guest socket's peer gone: EPIPE, not death */
+    snprintf(p->root, sizeof p->root, "%s", root);
+    snprintf(p->cwd, sizeof p->cwd, "/");
+    if ((e = aoi_vm_init(&p->vm, GUEST_SPACE))) return e;
+    p->vm.hint = HIGH_START;
+    p->mem.vm = &p->vm;
+    for (i = 0; i < 3; i++) { p->fd[i].used = 1; p->fd[i].host = i; snprintf(p->fd[i].path, AOI_PATH, "/dev/tty"); }
+
+    if (argc >= AOI_ARGS) return "too many arguments";
+    while (envp && envp[envc]) envc++;
+    if (envc >= AOI_ARGS) return "too many environment variables";
+
+    if ((e = load_elf(p, path, &prog))) return e;
+    resolve(p, "/", path, 1, p->exe);
+    if (prog.interp[0]) { if ((e = load_elf(p, prog.interp, &interp))) return e; }
+    else interp = prog;
+
+    if (IS_ERR(aoi_vm_map(&p->vm, STACK_TOP - STACK_SIZE, STACK_SIZE, AOI_PROT_R | AOI_PROT_W, 1)))
+        return "cannot map the stack";
+    note_map(p, STACK_TOP - STACK_SIZE, STACK_SIZE, 0, "[stack]");
+    {   /* The kernel returns from a handler without SA_RESTORER (bionic never sets it on
+         * arm64) through the vDSO's __kernel_rt_sigreturn; this page stands in for it. */
+        static const uint8_t tramp[8] = { 0x68, 0x11, 0x80, 0xd2, 0x01, 0x00, 0x00, 0xd4 };   /* mov x8, #139; svc #0 */
+        if (IS_ERR(aoi_vm_map(&p->vm, SIGTRAMP, PAGE, AOI_PROT_R | AOI_PROT_X, 1)) ||
+            !aoi_vm_write(&p->vm, SIGTRAMP, tramp, sizeof tramp, 0))
+            return "cannot map the signal trampoline";
+        note_map(p, SIGTRAMP, PAGE, 0, "[vdso]");
+    }
+    sp = STACK_TOP;
+    execfn = push_str(p, &sp, path);
+    platform = push_str(p, &sp, "aarch64");
+    {
+        FILE *u = det() ? NULL : fopen("/dev/urandom", "rb");
+        if (det()) det_fill(random16, 16);
+        else if (!u || fread(random16, 1, 16, u) != 16) memset(random16, 0x5a, 16);
+        if (u) fclose(u);
+    }
+    sp -= 16; rnd = sp; put(p, rnd, random16, 16);
+    for (i = argc - 1; i >= 0; i--) argp[i] = push_str(p, &sp, argv[i]);
+    for (i = 0; i < argc; i++) {
+        size_t l = strlen(argv[i]) + 1;
+        if (p->cmdline_len + l > sizeof p->cmdline) break;
+        memcpy(p->cmdline + p->cmdline_len, argv[i], l);
+        p->cmdline_len += l;
+    }
+    for (i = envc - 1; i >= 0; i--) envp_a[i] = push_str(p, &sp, envp[i]);
+
+    v = words;
+    v[n++] = (uint64_t)argc;
+    for (i = 0; i < argc; i++) v[n++] = argp[i];
+    v[n++] = 0;
+    for (i = 0; i < envc; i++) v[n++] = envp_a[i];
+    v[n++] = 0;
+#define AUX(k, val) do { v[n++] = (k); v[n++] = (val); } while (0)
+    AUX(AT_PHDR, prog.phdr); AUX(AT_PHENT, 56); AUX(AT_PHNUM, prog.phnum); AUX(AT_PAGESZ, PAGE);
+    AUX(AT_BASE, prog.interp[0] ? interp.bias : 0); AUX(AT_FLAGS, 0); AUX(AT_ENTRY, prog.entry);
+    AUX(AT_UID, 0); AUX(AT_EUID, 0); AUX(AT_GID, 0); AUX(AT_EGID, 0); AUX(AT_PLATFORM, platform);
+    AUX(AT_HWCAP, GUEST_HWCAP); AUX(AT_CLKTCK, 100); AUX(AT_SECURE, 0); AUX(AT_RANDOM, rnd);
+    AUX(AT_HWCAP2, 0); AUX(AT_EXECFN, execfn); AUX(AT_NULL, 0);
+#undef AUX
+    sp = down(sp - (uint64_t)n * 8, 16);
+    put(p, sp, words, (uint64_t)n * 8);
+
+    p->brk = up(prog.hi, PAGE);
+    p->cpu.mem = &p->mem;
+    p->cpu.pc = interp.entry;
+    p->cpu.sp = sp;
+    p->stack_start = sp;
+    p->th[0].state = AOI_T_RUN;
+    p->th[0].tid = GUEST_PID;
+    p->next_tid = GUEST_PID + 1;
+    p->cpu.syscall = aoi_proc_syscall;
+    p->cpu.host_ctx = p;
+    return NULL;
+}
+
+static void children_free(struct aoi_proc *p);
+
+void aoi_proc_free(struct aoi_proc *p)
+{
+    int i;
+    if (p->linux_mode) lx_unregister(p);                           /* no more signals from other processes */
+    children_free(p);
+    aoi_binder_free(p);
+    if (p->input_w > 0) { close(p->input_w); p->input_w = 0; }
+    shm_sync(p, 0, ~0ULL >> 1, 1);                                 /* shared file mappings reach their files */
+    for (i = 3; i < AOI_PROC_FDS; i++)
+        if (p->fd[i].used) {
+            if (p->fd[i].dir) closedir(p->fd[i].dir); else close(p->fd[i].host);
+        }
+    aoi_vm_free(&p->vm);
+}
+
+/* ---------- signals ---------- */
+
+/* Linux arm64 rt_sigframe: siginfo (128) then ucontext { flags, link, stack_t,
+ * sigmask, padding, mcontext @176 { fault_address, x0-x30, sp, pc, pstate,
+ * __reserved @288 [4096]: fpsimd_context record, then a null record } }, and a
+ * frame record {x29, x30} after it so unwinders can walk through the handler. */
+#define SF_UC        128
+#define SF_MC        (SF_UC + 176)
+#define SF_FP        (SF_MC + 288)
+#define SF_RECORD    (SF_MC + 288 + 4096)
+#define SF_SIZE      (SF_RECORD + 16)
+#define FPSIMD_MAGIC 0x46508001u
+#define SA_RESTORER_ 0x04000000u
+#define SA_ONSTACK_  0x08000000u
+#define SA_NODEFER_  0x40000000u
+#define SA_RESETHAND_ 0x80000000u
+#define SIGBIT(s)    ((uint64_t)1 << ((s) - 1))
+#define UNBLOCKABLE  (SIGBIT(9) | SIGBIT(19))       /* SIGKILL, SIGSTOP */
+
+static void put64(uint8_t *b, size_t off, uint64_t v) { memcpy(b + off, &v, 8); }
+static void put32(uint8_t *b, size_t off, uint32_t v) { memcpy(b + off, &v, 4); }
+
+/* Default action of a signal nobody handles: 1 = ignore, 0 = terminate. */
+static int default_ignored(int sig) { return sig == 17 || sig == 18 || sig == 23 || sig == 28; }
+
+/* Builds a signal frame on the running thread's stack (or its altstack) and
+ * points it at the handler. info: 128 bytes of siginfo prepared by the caller. */
+static int sig_deliver(struct aoi_proc *p, int sig, const uint8_t *info, uint64_t fault_addr)
+{
+    struct aoi_thread *t = &p->th[p->cur];
+    struct aoi_cpu *c = &p->cpu;
+    uint64_t *act = p->sigact[sig], sp = c->sp, frame;
+    static _Thread_local uint8_t f[SF_SIZE];
+    int on_alt = t->altstack[2] && sp >= t->altstack[0] && sp < t->altstack[0] + t->altstack[2], i;
+
+    if ((act[1] & SA_ONSTACK_) && !(t->altstack[1] & 2) && t->altstack[2] && !on_alt) {
+        sp = t->altstack[0] + t->altstack[2];
+        on_alt = 1;
+    }
+    frame = (sp - SF_SIZE) & ~(uint64_t)15;
+    memset(f, 0, sizeof f);
+    memcpy(f, info, 128);
+    put64(f, SF_UC + 16, t->altstack[0]);
+    put32(f, SF_UC + 24, (uint32_t)(on_alt ? 1 : (t->altstack[1] & 2 ? 2 : 0)));
+    put64(f, SF_UC + 32, t->altstack[2]);
+    put64(f, SF_UC + 40, t->susp ? t->susp_old : t->sigmask);   /* rt_sigsuspend: its caller's mask comes back */
+    t->susp = 0;
+    put64(f, SF_MC, fault_addr);
+    for (i = 0; i < 31; i++) put64(f, SF_MC + 8 + 8 * (size_t)i, c->x[i]);
+    put64(f, SF_MC + 256, c->sp);
+    put64(f, SF_MC + 264, c->pc);
+    put64(f, SF_MC + 272, (uint64_t)c->n << 31 | (uint64_t)c->z << 30 | (uint64_t)c->c << 29 | (uint64_t)c->v << 28);
+    put32(f, SF_FP, FPSIMD_MAGIC);
+    put32(f, SF_FP + 4, 528);
+    put32(f, SF_FP + 8, c->fpsr);
+    put32(f, SF_FP + 12, c->fpcr);
+    memcpy(f + SF_FP + 16, c->vreg, 512);
+    put64(f, SF_RECORD, c->x[29]);
+    put64(f, SF_RECORD + 8, c->x[30]);
+    if (!put(p, frame, f, SF_SIZE)) return 0;                      /* no stack: the thread is lost */
+
+    c->x[0] = (uint64_t)sig;
+    c->x[1] = frame;
+    c->x[2] = frame + SF_UC;
+    c->x[29] = frame + SF_RECORD;
+    c->x[30] = act[1] & SA_RESTORER_ ? act[2] : SIGTRAMP;
+    c->sp = frame;
+    c->pc = act[0];
+    c->excl_valid = 0;
+    t->sigmask |= act[3] & ~UNBLOCKABLE;
+    if (!(act[1] & SA_NODEFER_)) t->sigmask |= SIGBIT(sig);
+    if (act[1] & SA_RESETHAND_) act[0] = 0;
+    if (p->trace) fprintf(p->trace, "[sig] %d delivered to %d, handler %#llx\n", sig, t->tid, (unsigned long long)act[0]);
+    return 1;
+}
+
+/* rt_sigreturn: restore the context saved by sig_deliver (as possibly edited by the handler). */
+static int sig_return(struct aoi_proc *p)
+{
+    struct aoi_cpu *c = &p->cpu;
+    static _Thread_local uint8_t f[SF_SIZE];
+    uint64_t pstate, mask;
+    uint32_t magic, size;
+    int i;
+    if (!get(p, c->sp, f, SF_RECORD)) return 0;
+    for (i = 0; i < 31; i++) c->x[i] = u64(f + SF_MC + 8 + 8 * (size_t)i);
+    c->sp = u64(f + SF_MC + 256);
+    c->pc = u64(f + SF_MC + 264);
+    pstate = u64(f + SF_MC + 272);
+    c->n = (int)(pstate >> 31 & 1); c->z = (int)(pstate >> 30 & 1); c->c = (int)(pstate >> 29 & 1); c->v = (int)(pstate >> 28 & 1);
+    magic = u32(f + SF_FP); size = u32(f + SF_FP + 4);
+    if (magic == FPSIMD_MAGIC && size >= 528) {
+        c->fpsr = u32(f + SF_FP + 8); c->fpcr = u32(f + SF_FP + 12);
+        memcpy(c->vreg, f + SF_FP + 16, 512);
+    }
+    mask = u64(f + SF_UC + 40);
+    p->th[p->cur].sigmask = mask & ~UNBLOCKABLE;
+    c->excl_valid = 0;
+    return 1;
+}
+
+/* Delivers the first pending, unblocked signal of the running thread, if any.
+ * Returns 0 if a signal's default action ends the process (cpu.stop set). */
+static int sig_pending(struct aoi_proc *p)
+{
+    struct aoi_thread *t = &p->th[p->cur];
+    uint64_t ready = t->pending & ~t->sigmask;
+    int sig;
+    uint8_t info[128];
+    if (!ready) return 1;
+    sig = __builtin_ctzll(ready) + 1;
+    t->pending &= ~SIGBIT(sig);
+    if (p->sigact[sig][0] == 1 || (p->sigact[sig][0] == 0 && default_ignored(sig))) return 1;
+    if (p->sigact[sig][0] == 0) {
+        if (!p->linux_mode) fprintf(stderr, "[aoiproc] signal %d (default action: terminate)\n", sig);
+        p->term_sig = sig;
+        p->cpu.exit_code = 128 + sig;
+        p->cpu.stop = AOI_STOP_EXIT;
+        return 0;
+    }
+    memset(info, 0, sizeof info);
+    put32(info, 0, (uint32_t)sig);
+    put32(info, 8, (uint32_t)-6);                                  /* SI_TKILL */
+    put32(info, 16, (uint32_t)PID(p));
+    if (!sig_deliver(p, sig, info, 0)) { p->cpu.stop = AOI_STOP_FAULT; return 0; }
+    return 1;
+}
+
+/* Sends sig to thread index i: wakes it from a futex wait or sleep (-EINTR) if
+ * it will run a handler. Returns 0 if the default action ends the process. */
+static int sig_send(struct aoi_proc *p, int i, int sig)
+{
+    struct aoi_thread *t = &p->th[i];
+    uint64_t h = p->sigact[sig][0];
+    if (h == 1 || (h == 0 && default_ignored(sig))) return 1;
+    if (h == 0) {
+        if (!p->linux_mode) fprintf(stderr, "[aoiproc] signal %d to thread %d (default action: terminate)\n", sig, t->tid);
+        p->term_sig = sig;
+        p->cpu.exit_code = 128 + sig;
+        p->cpu.stop = AOI_STOP_EXIT;
+        p->thread_exit = 0;
+        return 0;
+    }
+    t->pending |= SIGBIT(sig);
+    if ((t->state == AOI_T_FUTEX || t->state == AOI_T_SLEEP) && !(t->sigmask & SIGBIT(sig))) {
+        uint64_t eintr = (uint64_t)-(int64_t)L_EINTR;
+        t->state = AOI_T_RUN;
+        if (t->restart) t->restart = 0;                        /* the syscall reruns after the handler */
+        else if (i == p->cur) p->cpu.x[0] = eintr; else t->cpu.x[0] = eintr;
+    }
+    return 1;
+}
+
+/* A CPU fault becomes SIGSEGV (or, on a userfaultfd-watched missing page, SIGBUS)
+ * if the guest handles it; an unwatched missing page is zero-filled and the
+ * instruction retried. Returns 1 if the guest continues. */
+static int sig_fault(struct aoi_proc *p)
+{
+    uint8_t info[128];
+    uint64_t a = p->cpu.fault_addr & 0x00ffffffffffffffULL;
+    int mapped_page = a < p->vm.size && p->vm.prot[a / AOI_VM_PAGE];
+    uint64_t h = p->sigact[11][0];
+    if (a < p->vm.size) {
+        uint64_t pg = a & ~(uint64_t)(AOI_VM_PAGE - 1);
+        if (!(p->vm.prot[pg / AOI_VM_PAGE] & AOI_PROT_MISSING) && pg + AOI_VM_PAGE < p->vm.size
+            && (p->vm.prot[pg / AOI_VM_PAGE + 1] & AOI_PROT_MISSING) && a + 64 > pg + AOI_VM_PAGE)
+            pg += AOI_VM_PAGE;                                     /* an access straddling into it */
+        if (p->vm.prot[pg / AOI_VM_PAGE] & AOI_PROT_MISSING) {
+            uint64_t sa = a > pg ? a : pg;
+            if (!uffd_watched(p, pg)) { uffd_fill(p, pg, AOI_VM_PAGE); p->cpu.stop = AOI_RUN; return 1; }
+            h = p->sigact[7][0];
+            if (h == 0 || h == 1) return 0;
+            memset(info, 0, sizeof info);
+            put32(info, 0, 7);
+            put32(info, 8, 2);                                     /* BUS_ADRERR, as userfaultfd's SIGBUS mode */
+            put64(info, 16, sa);
+            p->th[p->cur].sigmask &= ~SIGBIT(7);
+            if (p->trace) fprintf(p->trace, "[uffd] SIGBUS at %#llx\n", (unsigned long long)sa);
+            if (!sig_deliver(p, 7, info, sa)) return 0;
+            p->cpu.stop = AOI_RUN;
+            return 1;
+        }
+    }
+    if (h == 0 || h == 1) return 0;                                /* no handler: stop and report */
+    memset(info, 0, sizeof info);
+    put32(info, 0, 11);
+    put32(info, 8, mapped_page ? 2 : 1);                           /* SEGV_ACCERR / SEGV_MAPERR */
+    put64(info, 16, p->cpu.fault_addr);
+    p->th[p->cur].sigmask &= ~SIGBIT(11);                          /* a synchronous fault is never blocked */
+    if (p->log) {                                                  /* the app's log: a fault in native code (ART's */
+        static int logged;                                         /* null checks fault in its compiled code: not those) */
+        char w[256], w2[256];
+        aoi_proc_where(p, p->cpu.pc, w, sizeof w);
+        if (strstr(w, ".so+") && logged++ < 40) {
+            fprintf(p->log, "I/aoi: SIGSEGV at %#llx in tid %d: pc %s, lr %s\n", (unsigned long long)p->cpu.fault_addr,
+                    p->th[p->cur].tid, w, aoi_proc_where(p, p->cpu.x[30], w2, sizeof w2));
+            fprintf(p->log, "I/aoi:   x0 %#llx x1 %#llx x2 %#llx\n", (unsigned long long)p->cpu.x[0],
+                    (unsigned long long)p->cpu.x[1], (unsigned long long)p->cpu.x[2]);
+            {                                                      /* the callers, by the frame pointer chain */
+                uint64_t fp = p->cpu.x[29], fr[2];
+                int k;
+                for (k = 0; k < 12 && fp && aoi_vm_read(&p->vm, fp & 0x00ffffffffffffffULL, fr, 16, 0); k++) {
+                    fprintf(p->log, "I/aoi:   #%d %s\n", k, aoi_proc_where(p, fr[1], w2, sizeof w2));
+                    if (fr[0] <= fp) break;
+                    fp = fr[0];
+                }
+            }
+            fflush(p->log);
+        }
+    }
+    if (p->trace) {
+        char w[256], w2[256];
+        int k;
+        uint8_t obj[64];
+        fprintf(p->trace, "[sig] SIGSEGV at %#llx: pc %s, lr %s\n", (unsigned long long)p->cpu.fault_addr,
+                aoi_proc_where(p, p->cpu.pc, w, sizeof w), aoi_proc_where(p, p->cpu.x[30], w2, sizeof w2));
+        for (k = 0; k < 31; k++)
+            fprintf(p->trace, "[sig]   x%-2d %#018llx%s", k, (unsigned long long)p->cpu.x[k], k % 4 == 3 ? "\n" : "");
+        fprintf(p->trace, "\n[sig]   sp  %#llx\n", (unsigned long long)p->cpu.sp);
+        if (aoi_vm_read(&p->vm, p->cpu.x[0] & 0x00ffffffffffffffULL, obj, 64, 0)) {
+            fprintf(p->trace, "[sig]   [x0]:");
+            for (k = 0; k < 64; k += 4) fprintf(p->trace, " %08x", (unsigned)u32(obj + k));
+            fprintf(p->trace, "\n");
+        }
+#ifdef AOI_DEBUG
+        {
+            extern uint64_t *aoi_pcring;
+            uint64_t q;
+            if (aoi_pcring)                                        /* the last 40 pcs */
+                for (q = p->cpu.steps > 40 ? p->cpu.steps - 40 : 0; q < p->cpu.steps; q++)
+                    fprintf(p->trace, "[pc] %s\n", aoi_proc_where(p, aoi_pcring[q & 1023], w, sizeof w));
+        }
+#endif
+        {                                                          /* frame-pointer backtrace */
+            uint64_t fp = p->cpu.x[29], fr[2];
+            for (k = 0; k < 24 && fp && aoi_vm_read(&p->vm, fp, fr, 16, AOI_PROT_R); k++, fp = fr[0])
+                fprintf(p->trace, "[sig]   #%-2d %s\n", k, aoi_proc_where(p, fr[1], w, sizeof w));
+        }
+    }
+    if (!sig_deliver(p, 11, info, p->cpu.fault_addr)) return 0;
+    p->cpu.stop = AOI_RUN;
+    return 1;
+}
+
+/* ---------- green threads ---------- */
+
+static int64_t now_ns(void);
+
+/* A blocking call that would wait (an empty pipe, a binder looper with no work):
+ * the thread sleeps `ns` and the syscall runs again, so the other guest threads
+ * (the writer) get to run. */
+static uint64_t block_and_retry(struct aoi_proc *p, int64_t ns)
+{
+    p->th[p->cur].state = AOI_T_SLEEP;
+    p->th[p->cur].deadline = now_ns() + ns;
+    p->th[p->cur].restart = 1;
+    p->cpu.stop = AOI_STOP_RESTART;
+    return 0;
+}
+
+#define SLICE 100000                /* guest instructions per turn */
+
+int64_t aoi_mono_ns(void)
+{
+    struct timespec ts;
+    if (det()) return det_ns() + aoi_mono_offset;
+    clock_gettime(CLOCK_MONOTONIC, &ts);
+    return (int64_t)ts.tv_sec * 1000000000 + ts.tv_nsec + aoi_mono_offset;
+}
+
+static int64_t now_ns(void) { return aoi_mono_ns(); }
+
+/* Wakes up to n threads waiting on the futex word at addr (bitset-filtered);
+ * returns how many. Their futex call returns 0. */
+static int futex_wake(struct aoi_proc *p, uint64_t addr, int n, uint32_t bitset)
+{
+    int i, woken = 0;
+    for (i = 0; i < AOI_PROC_THREADS && woken < n; i++) {
+        struct aoi_thread *t = &p->th[i];
+        if (t->state == AOI_T_FUTEX && t->futex_addr == addr && (t->futex_bitset & bitset)) {
+            t->state = AOI_T_RUN;
+            t->cpu.x[0] = 0;
+            woken++;
+        }
+    }
+    return woken;
+}
+
+/* Saves the running thread and loads the next runnable one (round robin).
+ * Expired waits are woken first; if nobody can run but someone has a deadline,
+ * the host sleeps until it. Returns 0, or -1 if every thread waits forever. */
+static int schedule(struct aoi_proc *p)
+{
+    uint64_t steps = p->cpu.steps;
+    int i, k, next = -1;
+    for (;;) {
+        int64_t now, soonest = 0;
+        if (p->linux_mode && (p->stop_request || (p->xsig && !lx_take(p)))) return -2;   /* killed while all wait */
+        if (p->af) aoi_af_tick(p);                                 /* (it may wake a writer) */
+        now = now_ns();
+        soonest = p->af ? aoi_af_next(p) : 0;
+        for (i = 0; i < AOI_PROC_THREADS; i++) {
+            struct aoi_thread *t = &p->th[i];
+            if ((t->state == AOI_T_FUTEX || t->state == AOI_T_SLEEP) && t->deadline && t->deadline <= now) {
+                if (t->restart) t->restart = 0;
+                else if (i == p->cur) p->cpu.x[0] = t->state == AOI_T_FUTEX ? err(L_ETIMEDOUT) : 0;
+                else t->cpu.x[0] = t->state == AOI_T_FUTEX ? err(L_ETIMEDOUT) : 0;
+                t->state = AOI_T_RUN;
+            }
+            if ((t->state == AOI_T_FUTEX || t->state == AOI_T_SLEEP) && t->deadline &&
+                (!soonest || t->deadline < soonest)) soonest = t->deadline;
+        }
+        for (k = 1; k <= AOI_PROC_THREADS; k++) {
+            i = (p->cur + k) % AOI_PROC_THREADS;
+            if (p->vf && i != p->vf->thread) continue;             /* a vfork child runs alone */
+            if (p->th[i].state == AOI_T_RUN) { next = i; break; }
+        }
+        if (next >= 0) break;
+        if (!soonest && !p->linux_mode) return -1;
+        {   /* Linux mode: never longer than 10 ms, so a signal from another process (Ctrl-C,
+             * SIGCHLD) is seen; every thread waiting with no deadline is a wait for one */
+            int64_t d = !soonest ? 10000000 : soonest > now ? soonest - now : 0;
+            if (p->linux_mode && d > 10000000) d = 10000000;
+            struct timespec ts;
+            if (p->trace) {
+                fprintf(p->trace, "[sched] idle %.3f ms:", (double)d / 1e6);
+                for (i = 0; i < AOI_PROC_THREADS; i++)
+                    if (p->th[i].state != AOI_T_FREE)
+                        fprintf(p->trace, " %d:%d%s", p->th[i].tid, p->th[i].state,
+                                p->th[i].deadline ? (p->th[i].deadline == soonest ? "*" : "t") : "");
+                fprintf(p->trace, "\n");
+            }
+            ts.tv_sec = d / 1000000000; ts.tv_nsec = d % 1000000000;
+            if (det()) det_skew += d > 0 ? d : 1; /* deterministic: skip real sleep, advance virtual clock */
+            else nanosleep(&ts, NULL);
+        }
+    }
+    if (next != p->cur) {
+        p->th[p->cur].cpu = p->cpu;
+        p->cpu = p->th[next].cpu;
+        p->cur = next;
+    }
+    p->cpu.steps = steps;
+    p->cpu.excl_valid = 0;          /* another thread may have written: stxr must fail */
+    return 0;
+}
+
+static int live_threads(struct aoi_proc *p)
+{
+    int i, n = 0;
+    for (i = 0; i < AOI_PROC_THREADS; i++) n += p->th[i].state != AOI_T_FREE;
+    return n;
+}
+
+/* The running thread ends (exit, not exit_group): CLONE_CHILD_CLEARTID is honoured. */
+static void thread_end(struct aoi_proc *p)
+{
+    struct aoi_thread *t = &p->th[p->cur];
+    if (t->clear_tid) {
+        uint32_t zero = 0;
+        put(p, t->clear_tid, &zero, 4);
+        futex_wake(p, t->clear_tid & 0x00ffffffffffffffULL, 1 << 30, ~0u);
+    }
+    memset(t->comm, 0, sizeof t->comm);
+    t->state = AOI_T_FREE;
+}
+
+enum aoi_stop aoi_proc_run(struct aoi_proc *p, uint64_t max_steps)
+{
+    int k;
+    if (!p->linux_mode) det_steps = &p->cpu.steps;                 /* (one process at a time there) */
+    for (;;) {
+        uint64_t end = p->cpu.steps + SLICE;
+        enum aoi_stop st;
+        if (max_steps && end > max_steps) end = max_steps;
+        if (p->xsig && !lx_take(p)) { shm_sync(p, 0, ~0ULL >> 1, 1); return AOI_STOP_EXIT; }   /* from another process */
+        if (!sig_pending(p)) return p->cpu.stop;
+        if (p->stop_request) return AOI_RUN;
+        while (p->pause_request && !p->stop_request) {             /* (a background compile: the phone is hot) */
+            struct timespec ts = { 0, 250000000 };
+            nanosleep(&ts, NULL);
+        }
+        if (p->snap_request) {                                     /* every thread is between instructions */
+            const char *e;
+            int64_t t0 = now_ns();
+            p->snap_request = 0;
+            e = p->gpu_live ? "the GPU holds its state (aoi.Snapshot drops it first)" : aoi_snap_save(p, p->snap_path);
+            if (p->log) fprintf(p->log, "I/aoi: snapshot %s: %s (%.2f s)\n", p->snap_path, e ? e : "saved",
+                                (double)(now_ns() - t0) / 1e9);
+            p->snap_path[0] = 0;
+        }
+        if (p->redraw_request && p->sf) { p->redraw_request = 0; aoi_sf_redraw(p); }
+        if (p->sf) aoi_sf_tick(p);                                 /* vsync events that are due */
+        if (p->af) aoi_af_tick(p);                                 /* the audio output's clock */
+        st = aoi_cpu_run(&p->cpu, end);
+        if (st == AOI_STOP_FAULT && sig_fault(p)) continue;
+        if (st == AOI_RUN && p->samples && p->nsamples < p->maxsamples)   /* time slices, not waits */
+            p->samples[p->nsamples++] = p->cpu.pc;
+        if (st == AOI_STOP_EXIT && p->thread_exit) {
+            p->thread_exit = 0;
+            thread_end(p);
+            if (!live_threads(p)) { shm_sync(p, 0, ~0ULL >> 1, 1); return AOI_STOP_EXIT; }
+        } else if (st == AOI_RUN) {
+            if (max_steps && p->cpu.steps >= max_steps) return AOI_RUN;
+        } else if (st != AOI_STOP_YIELD) {
+            if (st == AOI_STOP_EXIT) shm_sync(p, 0, ~0ULL >> 1, 1);   /* exit_group: files get their pages */
+            return st;                                             /* exit_group, fault, undef */
+        }
+        p->cpu.stop = AOI_RUN;
+        if ((k = schedule(p)) == -2) {                             /* Linux mode: killed while waiting */
+            if (!p->term_sig && !p->stop_request) p->term_sig = 9;
+            p->cpu.exit_code = 128 + p->term_sig;
+            p->cpu.stop = AOI_STOP_EXIT;
+            shm_sync(p, 0, ~0ULL >> 1, 1);
+            return AOI_STOP_EXIT;
+        }
+        if (k) {
+            fprintf(stderr, "[aoiproc] deadlock: every thread waits on a futex with no timeout\n");
+            p->cpu.stop = AOI_STOP_SYSCALL;
+            return AOI_STOP_SYSCALL;
+        }
+    }
+}
+
+/* ---------- syscalls ---------- */
+
+enum {
+    NR_getcwd = 17, NR_pipe2 = 59, NR_eventfd2 = 19, NR_memfd_create = 279, NR_timerfd_create = 85, NR_timerfd_settime = 86, NR_timerfd_gettime = 87, NR_epoll_create1 = 20, NR_epoll_ctl = 21,
+    NR_epoll_pwait = 22, NR_ppoll = 73, NR_mincore = 232, NR_msync = 227, NR_flock = 32, NR_userfaultfd = 282, NR_rt_sigreturn = 139, NR_rt_sigtimedwait = 137, NR_setpriority = 140, NR_getpriority = 141, NR_clone = 220, NR_membarrier = 283, NR_socket = 198, NR_socketpair = 199, NR_connect = 203, NR_sendto = 206, NR_recvfrom = 207,
+    NR_bind = 200, NR_listen = 201, NR_accept = 202, NR_getsockname = 204, NR_getpeername = 205,
+    NR_shutdown = 210, NR_sendmsg = 211, NR_recvmsg = 212, NR_accept4 = 242,
+    NR_setsockopt = 208, NR_getsockopt = 209, NR_symlinkat = 36, NR_linkat = 37, NR_renameat = 38, NR_ftruncate = 46, NR_fchmod = 52, NR_fchmodat = 53, NR_fchownat = 54, NR_fchown = 55, NR_fsync = 82, NR_fdatasync = 83, NR_utimensat = 88, NR_renameat2 = 276, NR_dup = 23, NR_dup3 = 24, NR_setpgid = 154, NR_getpgid = 155, NR_getsid = 156, NR_statfs = 43, NR_fstatfs = 44, NR_fcntl = 25, NR_ioctl = 29, NR_mkdirat = 34, NR_unlinkat = 35, NR_faccessat = 48,
+    NR_chdir = 49, NR_openat = 56, NR_close = 57, NR_getdents64 = 61, NR_lseek = 62, NR_read = 63,
+    NR_write = 64, NR_readv = 65, NR_writev = 66, NR_pread64 = 67, NR_pwrite64 = 68,
+    NR_readlinkat = 78, NR_newfstatat = 79, NR_fstat = 80, NR_exit = 93, NR_exit_group = 94,
+    NR_set_tid_address = 96, NR_futex = 98, NR_set_robust_list = 99, NR_nanosleep = 101,
+    NR_clock_gettime = 113, NR_clock_getres = 114, NR_clock_nanosleep = 115,
+    NR_sched_getparam = 121, NR_sched_getscheduler = 120, NR_sched_getaffinity = 123, NR_sched_yield = 124, NR_kill = 129, NR_tkill = 130, NR_tgkill = 131,
+    NR_sigaltstack = 132, NR_rt_sigaction = 134, NR_rt_sigprocmask = 135, NR_uname = 160,
+    NR_getrlimit = 163, NR_umask = 166, NR_prctl = 167, NR_gettimeofday = 169, NR_getpid = 172,
+    NR_getppid = 173, NR_getuid = 174, NR_geteuid = 175, NR_getgid = 176, NR_getegid = 177,
+    NR_gettid = 178, NR_sysinfo = 179, NR_brk = 214, NR_munmap = 215, NR_mremap = 216, NR_mmap = 222,
+    NR_mprotect = 226, NR_madvise = 233, NR_prlimit64 = 261, NR_getrandom = 278, NR_faccessat2 = 439
+};
+
+static int64_t sx32(uint64_t v) { return (int64_t)(int32_t)v; }
+
+static void trace_sys(struct aoi_proc *p, uint64_t nr, uint64_t r)
+{
+    if (!p->trace) return;
+    fprintf(p->trace, "[sys] %3llu(%#llx, %#llx, %#llx, %#llx) = %lld\n", (unsigned long long)nr,
+            (unsigned long long)p->cpu.x[0], (unsigned long long)p->cpu.x[1],
+            (unsigned long long)p->cpu.x[2], (unsigned long long)p->cpu.x[3], (long long)r);
+}
+
+static void note_map(struct aoi_proc *p, uint64_t start, uint64_t len, uint64_t off, const char *path)
+{
+    struct aoi_proc_map *m;
+    if (p->nmaps == AOI_PROC_MAPS) {                                /* full: forget what is unmapped now */
+        int i, j;
+        for (i = j = 0; i < p->nmaps; i++) {
+            uint64_t s0 = p->maps[i].start;
+            if (s0 < p->vm.size && p->vm.prot[s0 / AOI_VM_PAGE]) p->maps[j++] = p->maps[i];
+        }
+        p->nmaps = j;
+        if (p->nmaps == AOI_PROC_MAPS) return;
+    }
+    m = &p->maps[p->nmaps++];
+    m->start = start; m->len = len; m->off = off;
+    {
+        size_t n = strlen(path);
+        if (n >= sizeof m->path) { path += n - (sizeof m->path - 1); n = sizeof m->path - 1; }  /* keep the tail */
+        memcpy(m->path, path, n);
+        m->path[n] = 0;
+    }
+}
+
+int aoi_host_msgpair(int sv[2])
+{
+    int k, size = 256 * 1024;
+    if (!getenv("AOI_NO_SEQPACKET") && !socketpair(AF_UNIX, SOCK_SEQPACKET, 0, sv)) return 0;   /* (the env: test Darwin's path) */
+    if (socketpair(AF_UNIX, SOCK_DGRAM, 0, sv)) return -1;
+    for (k = 0; k < 2; k++) {
+        setsockopt(sv[k], SOL_SOCKET, SO_SNDBUF, &size, sizeof size);
+        setsockopt(sv[k], SOL_SOCKET, SO_RCVBUF, &size, sizeof size);
+    }
+    return 0;
+}
+
+void aoi_proc_touch(struct aoi_proc *p, int action, float x, float y)
+{
+    int32_t rec[4];
+    int w = p->input_w;
+    if (w <= 0) return;
+    rec[0] = action; memcpy(&rec[1], &x, 4); memcpy(&rec[2], &y, 4); rec[3] = 0;
+    if (write(w, rec, sizeof rec) != (ssize_t)sizeof rec) {}       /* a full pipe drops it */
+}
+
+void aoi_proc_key(struct aoi_proc *p, int action, int32_t value)
+{
+    float v;
+    memcpy(&v, &value, 4);                                         /* aoi.Input reads it as y's bits */
+    aoi_proc_touch(p, action, 0, v);
+}
+
+/* Writes back the shared file mappings that overlap [a, a+len); drop: forget the ones
+ * that range covers (munmap). */
+static void shm_sync(struct aoi_proc *p, uint64_t a, uint64_t len, int drop)
+{
+    int i, j;
+    static _Thread_local uint8_t buf[65536];
+    for (i = 0; i < p->nshm; i++) {
+        uint64_t s = p->shm[i].addr, e = s + p->shm[i].len, lo = a > s ? a : s, hi = a + len < e ? a + len : e, x;
+        struct stat st;
+        if (lo >= hi) continue;
+        if (!fstat(p->shm[i].fd, &st) && (uint64_t)st.st_size < p->shm[i].off + (hi - s))
+            hi = (uint64_t)st.st_size > p->shm[i].off ? s + ((uint64_t)st.st_size - p->shm[i].off) : s;
+        for (x = lo; x < hi; ) {
+            uint64_t n = hi - x < sizeof buf ? hi - x : sizeof buf;
+            if (!aoi_vm_read(&p->vm, x, buf, n, 0) ||
+                pwrite(p->shm[i].fd, buf, n, (off_t)(p->shm[i].off + (x - s))) != (ssize_t)n) break;
+            x += n;
+        }
+    }
+    if (!drop) return;
+    for (i = j = 0; i < p->nshm; i++) {
+        if (a <= p->shm[i].addr && p->shm[i].addr + p->shm[i].len <= a + len) { close(p->shm[i].fd); continue; }
+        p->shm[j++] = p->shm[i];
+    }
+    p->nshm = j;
+}
+
+uint64_t aoi_proc_map_anon(struct aoi_proc *p, uint64_t len, const char *name)
+{
+    uint64_t a = aoi_vm_map(&p->vm, 0, up(len, PAGE), AOI_PROT_R | AOI_PROT_W, 0);
+    if (!IS_ERR(a)) note_map(p, a, len, 0, name);
+    return a;
+}
+
+void aoi_proc_unmap_anon(struct aoi_proc *p, uint64_t addr, uint64_t len)
+{
+    aoi_vm_unmap(&p->vm, addr, up(len, PAGE));
+}
+
+const char *aoi_proc_where(struct aoi_proc *p, uint64_t addr, char *buf, size_t n)
+{
+    int i;
+    for (i = p->nmaps - 1; i >= 0; i--) {
+        struct aoi_proc_map *m = &p->maps[i];
+        if (addr >= m->start && addr < m->start + m->len) {
+            snprintf(buf, n, "%s+%#llx", m->path, (unsigned long long)(addr - m->start + m->off));
+            return buf;
+        }
+    }
+    snprintf(buf, n, "?");
+    return buf;
+}
+
+/* Every live thread to the app's log: state, the futex it waits on, pc, lr and the
+ * frame-pointer chain (a hang: who waits for whom). */
+void aoi_proc_log_threads(struct aoi_proc *p)
+{
+    static const char *st[] = { "free", "run", "futex", "sleep" };
+    char w[256], w2[256];
+    int i, k;
+    if (!p->log) return;
+    for (i = 0; i < AOI_PROC_THREADS; i++) {
+        struct aoi_thread *t = &p->th[i];
+        struct aoi_cpu *c = i == p->cur ? &p->cpu : &t->cpu;
+        uint64_t fp = c->x[29], fr[2];
+        if (t->state == AOI_T_FREE) continue;
+        fprintf(p->log, "I/aoi: thread %d \"%.15s\" %s%s futex %#llx: pc %s, lr %s\n", t->tid, t->comm, st[t->state & 3],
+                i == p->cur ? " (current)" : "", (unsigned long long)t->futex_addr,
+                aoi_proc_where(p, c->pc, w, sizeof w), aoi_proc_where(p, c->x[30], w2, sizeof w2));
+        for (k = 0; k < 16 && fp && aoi_vm_read(&p->vm, fp & 0x00ffffffffffffffULL, fr, 16, 0); k++) {
+            fprintf(p->log, "I/aoi:   #%d %s\n", k, aoi_proc_where(p, fr[1], w2, sizeof w2));
+            if (fr[0] <= fp) break;
+            fp = fr[0];
+        }
+    }
+    fflush(p->log);
+}
+
+/* ---------- /proc: generated when opened ---------- */
+
+/* Writes the content of a synthetic /proc file into a fresh host temp file and
+ * returns its descriptor (positioned at 0), or -1 if `g` is not one we make. */
+static int proc_file(struct aoi_proc *p, const char *g)
+{
+    const char *f;
+    FILE *t;
+    int fd;
+    if (!strncmp(g, "/proc/self/", 11)) f = g + 11;
+    else if (!strncmp(g, "/proc/thread-self/", 18)) f = g + 18;
+    else if (!strncmp(g, "/proc/1000/", 11)) f = g + 11;
+    else if (!strncmp(g, "/proc/1000/task/1000/", 21)) f = g + 21;
+    else f = g;                                                    /* /proc/meminfo etc. */
+    if (!(t = tmpfile())) return -1;
+    if (!strcmp(f, "cmdline")) {
+        fwrite(p->cmdline, 1, p->cmdline_len, t);
+    } else if (!strcmp(f, "comm")) {
+        const char *b = strrchr(p->exe, '/');
+        fprintf(t, "%.15s\n", b ? b + 1 : p->exe);
+    } else if (!strcmp(f, "stat")) {
+        const char *b = strrchr(p->exe, '/');
+        fprintf(t, "%d (%.15s) R 1 %d %d 0 -1 4194304 0 0 0 0 %llu 0 0 0 20 0 1 0 1 %llu %llu "
+                   "18446744073709551615 0 0 %llu 0 0 0 0 0 0 0 0 0 0 17 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n",
+                1000, b ? b + 1 : p->exe, 1000, 1000, (unsigned long long)(p->cpu.steps / 1000000),
+                (unsigned long long)(p->vm.nchunks * AOI_VM_CHUNK),
+                (unsigned long long)(p->vm.nchunks * AOI_VM_CHUNK / AOI_VM_PAGE),
+                (unsigned long long)p->stack_start);
+    } else if (!strcmp(f, "status")) {
+        fprintf(t, "Name:\tapp\nState:\tR (running)\nTgid:\t1000\nPid:\t1000\nPPid:\t1\nTracerPid:\t0\n"
+                   "Uid:\t0\t0\t0\t0\nGid:\t0\t0\t0\t0\nThreads:\t1\nVmSize:\t%llu kB\nVmRSS:\t%llu kB\n"
+                   "SigQ:\t0/0\nSigPnd:\t0000000000000000\nSigBlk:\t%016llx\n",
+                (unsigned long long)(p->vm.nchunks * AOI_VM_CHUNK >> 10),
+                (unsigned long long)(p->vm.nchunks * AOI_VM_CHUNK >> 10), (unsigned long long)p->th[p->cur].sigmask);
+    } else if (!strcmp(f, "maps")) {                               /* runs of equal protection */
+        uint64_t a = 0, n = p->vm.size / AOI_VM_PAGE;
+        while (a < n) {
+            uint8_t pr = p->vm.prot[a];
+            uint64_t b = a + 1, start = a * AOI_VM_PAGE;
+            char w[256];
+            if (!pr) { a++; continue; }
+            while (b < n && p->vm.prot[b] == pr) b++;
+            aoi_proc_where(p, start, w, sizeof w);
+            if (!strcmp(w, "?")) w[0] = 0; else *strrchr(w, '+') = 0;
+            fprintf(t, "%llx-%llx %c%c%cp 00000000 00:00 0 %s\n", (unsigned long long)start,
+                    (unsigned long long)(b * AOI_VM_PAGE), pr & 1 ? 'r' : '-', pr & 2 ? 'w' : '-', pr & 4 ? 'x' : '-', w);
+            a = b;
+        }
+    } else if (!strcmp(g, "/proc/meminfo")) {
+        fprintf(t, "MemTotal:        8000000 kB\nMemFree:         4000000 kB\nMemAvailable:    4000000 kB\n"
+                   "Buffers:               0 kB\nCached:                0 kB\nSwapTotal:             0 kB\nSwapFree:              0 kB\n");
+    } else if (!strcmp(g, "/proc/cpuinfo")) {
+        fprintf(t, "processor\t: 0\nBogoMIPS\t: 48.00\nFeatures\t: fp asimd crc32 atomics\nCPU implementer\t: 0x61\n"
+                   "CPU architecture: 8\nCPU variant\t: 0x0\nCPU part\t: 0x000\nCPU revision\t: 0\n\n");
+    } else if (!strcmp(g, "/proc/sys/kernel/randomize_va_space")) {
+        fprintf(t, "2\n");
+    } else if (!strcmp(g, "/proc/sys/kernel/random/boot_id")) {   /* libcutils' ashmem names its regions with it */
+        static unsigned boot[4];
+        if (!boot[0]) { boot[0] = (unsigned)time(NULL) | 1; boot[1] = (unsigned)getpid(); boot[2] = 0x4a0e1d00; boot[3] = 0xa01c0de5; }
+        fprintf(t, "%08x-%04x-4%03x-%04x-%04x%08x\n", boot[0], boot[1] & 0xffff, boot[2] & 0xfff, 0x8000 | (boot[3] & 0x3fff),
+                boot[1] >> 16, boot[3]);
+    } else {
+        fclose(t);
+        return -1;
+    }
+    fflush(t);
+    fd = dup(fileno(t));
+    fclose(t);
+    if (fd >= 0) lseek(fd, 0, SEEK_SET);
+    return fd;
+}
+
+static uint64_t sys_mmap(struct aoi_proc *p, uint64_t addr, uint64_t len, int prot, int flags,
+                         int64_t fd, uint64_t off)
+{
+    int fixed = (flags & 0x10) != 0, noreplace = (flags & 0x100000) != 0, shared = 0;
+    uint64_t a, i;
+    struct aoi_proc_fd *f = NULL;
+    if (!len || off % PAGE) return err(L_EINVAL);
+    if (!(flags & 0x20)) {                                         /* file mapping */
+        if (!(f = fd_get(p, (uint64_t)fd))) return err(L_EBADF);
+        if (f->kind == AOI_FD_BINDER) {                            /* the binder receive buffer */
+            a = aoi_vm_map(&p->vm, fixed ? addr : (addr ? down(addr, PAGE) : 0), len, prot & 7, fixed);
+            if (!IS_ERR(a)) { aoi_binder_mapped(p, a, up(len, PAGE)); note_map(p, a, len, 0, f->path); }
+            return a;
+        }
+        if ((flags & 3) == 1 && (prot & 2) && (f->seals & 0x18))   /* MAP_SHARED, PROT_WRITE on a memfd sealed */
+            return err(L_EPERM);                                   /* F_SEAL_(FUTURE_)WRITE: how Chromium tells
+                                                                    * a read-only region (ashmem_get_prot_region) */
+        if ((flags & 3) == 1 && (fcntl(f->host, F_GETFL) & O_ACCMODE) == O_RDWR)
+            shared = 1;                                            /* MAP_SHARED, writable fd: the file's own pages */
+    }
+    if (shared && !fixed && !noreplace) {
+        /* where the file's 16 KiB host pages can be mapped shared: an address that agrees
+         * with the offset modulo the host page, the rest of the last host page reserved */
+        uint64_t ho = off % SHARED_PAGE, span = up(ho + len, SHARED_PAGE) + SHARED_PAGE, b = 0, s0, e0;
+        b = aoi_vm_map(&p->vm, addr ? down(addr, PAGE) : 0, span, 0, 0);
+        if (!IS_ERR(b)) {
+            s0 = up(b, SHARED_PAGE); e0 = s0 + up(ho + len, SHARED_PAGE);
+            if (s0 > b) aoi_vm_unmap(&p->vm, b, s0 - b);
+            if (b + span > e0) aoi_vm_unmap(&p->vm, e0, b + span - e0);
+            addr = s0 + ho; fixed = 1; shared = 2;                 /* over its own reservation; the pad */
+            for (i = s0; i < e0; i += PAGE)                        /* goes with it (munmap) */
+                if (i < addr || i >= addr + up(len, PAGE)) p->vm.prot[i / PAGE] |= AOI_PROT_SLACK;
+        }
+    }
+    if (noreplace) {
+        for (i = 0; i < up(len, PAGE); i += PAGE)
+            if (addr + i >= p->vm.size || p->vm.prot[(addr + i) / PAGE]) return err(L_EEXIST);
+        fixed = 1;
+    }
+    /* anonymous memory gets its final protection at once (a PROT_NONE reservation
+     * must not back chunks); a file mapping is written first, then protected */
+    a = aoi_vm_map(&p->vm, fixed ? addr : (addr ? down(addr, PAGE) : 0), len,
+                   f ? AOI_PROT_R | AOI_PROT_W : prot & 7, fixed);
+    if (IS_ERR(a)) return a;
+    if (!f) return a;
+    if (f) {                                                       /* private, copy-on-write view of the file */
+        struct stat st;
+        int e = fstat(f->host, &st) ? -errno : aoi_vm_map_file(&p->vm, a, len, f->host, off, (uint64_t)st.st_size, shared);
+        if (e < 0) { aoi_vm_unmap(&p->vm, a, len); errno = -e; return herr(); }
+        note_map(p, a, len, off, f->path);
+        {                                                          /* Skia's raster stages natively (core/hle.c): */
+            size_t n = strlen(f->path);                            /* libhwui's code segment (vaddr = offset) */
+            const char *w = getenv("AOI_WATCH_LIB");             /* (host debugging: core/hle.h) */
+            size_t wn = w ? strlen(w) : 0;
+            if (w && (prot & 4) && n > wn && f->path[n - wn - 1] == '/' && !strcmp(f->path + n - wn, w) && a >= off) {
+                int k;
+                aoi_hle_watch = 1;
+                for (k = -1; k < AOI_PROC_THREADS; k++) {
+                    struct aoi_cpu *c = k < 0 ? &p->cpu : &p->th[k].cpu;
+                    c->hle_base = a - off; c->hle_lo = a; c->hle_hi = a + len;
+                }
+            } else if (!w && (prot & 4) && n >= 24 && !strcmp(f->path + n - 24, "/system/lib64/libhwui.so") && a >= off) {
+                int k;
+                aoi_hle_attach(&p->cpu, a - off);
+                for (k = 0; k < AOI_PROC_THREADS; k++) aoi_hle_attach(&p->th[k].cpu, a - off);
+            }
+        }
+        if ((flags & 3) == 1 && (prot & 2) && p->nshm < (int)(sizeof p->shm / sizeof p->shm[0])) {   /* MAP_SHARED, writable */
+            int d = dup(f->host);
+            if (d >= 0) {
+                p->shm[p->nshm].addr = a; p->shm[p->nshm].len = up(len, PAGE);
+                p->shm[p->nshm].off = off; p->shm[p->nshm].fd = d;
+                p->nshm++;
+            }
+        }
+    }
+    aoi_vm_protect(&p->vm, a, len, prot & 7);
+    return a;
+}
+
+/* ---------- eventfd, epoll, ppoll ----------
+ * Emulated, not the host's (Darwin has neither eventfd nor epoll). Readiness is
+ * level-triggered: eventfd from its counter, host-backed fds from poll(2) with no
+ * wait. A wait with nothing ready sleeps a little and runs again until its own
+ * deadline (t->poll_deadline), so a write by another green thread wakes it. */
+#define EP_IN 0x001u
+#define EP_OUT 0x004u
+#define EP_ERR 0x008u
+#define EP_HUP 0x010u
+
+/* A timerfd's expirations up to now into its count (and its next expiry on). */
+static void timer_settle(struct aoi_proc_fd *f)
+{
+    int64_t now = now_ns();
+    uint64_t n;
+    if (f->kind != AOI_FD_TIMERFD || !f->tnext || now < f->tnext) return;
+    if (f->tint > 0) {
+        n = 1 + (uint64_t)((now - f->tnext) / f->tint);
+        f->tnext += (int64_t)n * f->tint;
+    } else {
+        n = 1;
+        f->tnext = 0;
+    }
+    f->count += n;
+}
+
+static uint32_t fd_ready(struct aoi_proc *p, int fd, uint32_t want)
+{
+    struct aoi_proc_fd *f = fd_get(p, (uint64_t)fd);
+    uint32_t r = 0;
+    if (!f) return 0;
+    switch (f->kind) {
+    case AOI_FD_TIMERFD:
+        timer_settle(f);
+        if (f->count) r |= EP_IN;
+        break;
+    case AOI_FD_EVENTFD:
+        if (*ev_count(p, f)) r |= EP_IN;
+        if (*ev_count(p, f) < 0xfffffffffffffffeULL) r |= EP_OUT;
+        break;
+    case AOI_FD_FILE: case AOI_FD_PIPE: case AOI_FD_INET: case AOI_FD_DNS: {
+        struct pollfd pf;
+        pf.fd = f->host; pf.events = (short)((want & EP_IN ? POLLIN : 0) | (want & EP_OUT ? POLLOUT : 0)); pf.revents = 0;
+        if (poll(&pf, 1, 0) > 0) {
+            if (pf.revents & POLLIN) r |= EP_IN;
+            if (pf.revents & POLLOUT) r |= EP_OUT;
+            if (pf.revents & POLLERR) r |= EP_ERR;
+            if (pf.revents & POLLHUP) r |= EP_HUP;
+        }
+        break;
+    }
+    case AOI_FD_LOGD: r |= EP_OUT; break;
+    case AOI_FD_TTY:
+        if (aoi_console && aoi_tty_readable(aoi_console)) r |= EP_IN;
+        r |= EP_OUT;
+        break;
+    default: break;                                                /* sockets, binder, epoll, uffd: never */
+    }
+    return r & (want | EP_ERR | EP_HUP);
+}
+
+/* Start or continue a wait; 1 = timed out now, 0 = the thread was put to sleep. */
+static int poll_wait(struct aoi_proc *p, int64_t timeout_ns)
+{
+    struct aoi_thread *t = &p->th[p->cur];
+    int64_t now = now_ns(), left;
+    if (!t->poll_deadline) t->poll_deadline = timeout_ns < 0 ? INT64_MAX : now + timeout_ns;
+    left = t->poll_deadline - now;
+    if (left <= 0) { t->poll_deadline = 0; return 1; }
+    block_and_retry(p, left < 2000000 ? left : 2000000);
+    return 0;
+}
+
+static void epoll_unref(struct aoi_epoll *ep)
+{
+    if (ep && --ep->refs <= 0) { free(ep->e); free(ep); }
+}
+
+/* A closed fd leaves every epoll set (its last reference in the kernel's terms). */
+static void epoll_forget(struct aoi_proc *p, int fd)
+{
+    int i, k;
+    for (i = 0; i < AOI_PROC_FDS; i++)
+        if (p->fd[i].used && p->fd[i].kind == AOI_FD_EPOLL && p->fd[i].ep) {
+            struct aoi_epoll *ep = p->fd[i].ep;
+            for (k = 0; k < ep->n; k++)
+                if (ep->e[k].fd == fd) { ep->e[k] = ep->e[--ep->n]; k--; }
+        }
+}
+
+static uint64_t sys_epoll_ctl(struct aoi_proc *p, struct aoi_proc_fd *f, int op, int fd, uint64_t evp)
+{
+    struct aoi_epoll *ep = f->ep;
+    uint8_t ev[16];
+    int k;
+    if (!fd_get(p, (uint64_t)fd)) return err(L_EBADF);
+    for (k = 0; k < ep->n && ep->e[k].fd != fd; k++) {}
+    if (op != 2 && !get(p, evp, ev, 16)) return err(L_EFAULT);   /* {u32 events; u64 data}, not packed on arm64 */
+    switch (op) {
+    case 1:                                                        /* EPOLL_CTL_ADD */
+        if (k < ep->n) return err(L_EEXIST);
+        if (ep->n == ep->cap) {
+            int nc = ep->cap ? 2 * ep->cap : 16;
+            void *ne = realloc(ep->e, (size_t)nc * sizeof *ep->e);
+            if (!ne) return err(L_ENOMEM);
+            ep->e = ne; ep->cap = nc;
+        }
+        ep->e[ep->n].fd = fd; ep->e[ep->n].events = u32(ev); ep->e[ep->n].data = u64(ev + 8);
+        ep->n++;
+        return 0;
+    case 2:                                                        /* EPOLL_CTL_DEL */
+        if (k == ep->n) return err(L_ENOENT);
+        ep->e[k] = ep->e[--ep->n];
+        return 0;
+    case 3:                                                        /* EPOLL_CTL_MOD */
+        if (k == ep->n) return err(L_ENOENT);
+        ep->e[k].events = u32(ev); ep->e[k].data = u64(ev + 8);
+        return 0;
+    default: return err(L_EINVAL);
+    }
+}
+
+static uint64_t sys_epoll_pwait(struct aoi_proc *p, struct aoi_proc_fd *f, uint64_t evp, int max, int timeout_ms)
+{
+    struct aoi_epoll *ep = f->ep;
+    int k, n = 0;
+    if (max <= 0) return err(L_EINVAL);
+    for (k = 0; k < ep->n && n < max; k++) {
+        uint32_t r = fd_ready(p, ep->e[k].fd, ep->e[k].events);
+        if (r) {
+            uint8_t ev[16];
+            memset(ev, 0, sizeof ev);
+            memcpy(ev, &r, 4); memcpy(ev + 8, &ep->e[k].data, 8);
+            if (!put(p, evp + 16 * (uint64_t)n, ev, 16)) return err(L_EFAULT);
+            n++;
+            if (ep->e[k].events & 0x40000000u) ep->e[k].events = 0;   /* EPOLLONESHOT: disarmed */
+        }
+    }
+    if (n || timeout_ms == 0) { p->th[p->cur].poll_deadline = 0; return (uint64_t)n; }
+    return poll_wait(p, timeout_ms < 0 ? -1 : (int64_t)timeout_ms * 1000000) ? 0 : 0;
+}
+
+/* pselect6(n, readfds, writefds, exceptfds, timeout, sigmask): fd_ready over the sets. */
+static uint64_t sys_pselect(struct aoi_proc *p, uint64_t nfds, uint64_t rp, uint64_t wp, uint64_t ep, uint64_t tsp)
+{
+    uint64_t in[2][16], out[2][16], ex[16];
+    int64_t timeout = -1;
+    int i, n = 0, words;
+    if (nfds > 1024) return err(L_EINVAL);
+    words = (int)((nfds + 63) / 64);
+    memset(in, 0, sizeof in); memset(out, 0, sizeof out); memset(ex, 0, sizeof ex);
+    if (tsp) {
+        uint8_t ts[16];
+        if (!get(p, tsp, ts, 16)) return err(L_EFAULT);
+        timeout = (int64_t)u64(ts) * 1000000000 + (int64_t)u64(ts + 8);
+    }
+    if ((rp && !get(p, rp, in[0], (uint64_t)words * 8)) || (wp && !get(p, wp, in[1], (uint64_t)words * 8)))
+        return err(L_EFAULT);
+    for (i = 0; i < (int)nfds; i++) {
+        uint32_t want = 0, rev;
+        if (in[0][i / 64] >> (i % 64) & 1) want |= EP_IN;
+        if (in[1][i / 64] >> (i % 64) & 1) want |= EP_OUT;
+        if (!want) continue;
+        if (!fd_get(p, (uint64_t)i)) return err(L_EBADF);
+        rev = fd_ready(p, i, want);
+        if (rev & (EP_IN | EP_HUP | EP_ERR) && (want & EP_IN)) { out[0][i / 64] |= 1ULL << (i % 64); n++; }
+        if (rev & (EP_OUT | EP_ERR) && (want & EP_OUT)) { out[1][i / 64] |= 1ULL << (i % 64); n++; }
+    }
+    if (n || timeout == 0) {
+        p->th[p->cur].poll_deadline = 0;
+        if ((rp && !put(p, rp, out[0], (uint64_t)words * 8)) || (wp && !put(p, wp, out[1], (uint64_t)words * 8)) ||
+            (ep && !put(p, ep, ex, (uint64_t)words * 8)))
+            return err(L_EFAULT);
+        return (uint64_t)n;
+    }
+    poll_wait(p, timeout);
+    return 0;
+}
+
+/* Linux mode: the host mode for a guest chmod. Root may open anything, the host user
+ * may not: the owner keeps read and write (and search on directories), as fakeroot. */
+static mode_t lx_mode(struct aoi_proc *p, int fd, const char *h, mode_t m)
+{
+    struct stat st;
+    if (!p->linux_mode) return m;
+    if (fd >= 0 ? fstat(fd, &st) : stat(h, &st)) return m | 0600;
+    return m | (S_ISDIR(st.st_mode) ? 0700 : 0600);
+}
+
+/* ---------- the terminal (Linux mode, core/tty.c) ---------- */
+
+static int is_tty_path(const char *g)
+{
+    return !strcmp(g, "/dev/tty") || !strcmp(g, "/dev/console") || !strcmp(g, "/dev/pts/0") || !strcmp(g, "/dev/tty0");
+}
+
+/* A terminal looks like /dev/pts/0: a character device, major 136. */
+static void tty_stat(uint8_t *sbuf)
+{
+    uint32_t mode = 020620;
+    uint64_t rdev = 136 << 8, size = 0;
+    memcpy(sbuf + 16, &mode, 4);
+    memcpy(sbuf + 32, &rdev, 8);
+    memcpy(sbuf + 48, &size, 8);
+}
+
+/* struct stat (Linux arm64, 128 bytes) -> struct statx (256 bytes, STATX_BASIC_STATS). */
+static void statx_from_stat(const uint8_t *s, uint8_t *x)
+{
+    uint64_t dev = u64(s), rdev = u64(s + 32);
+    uint32_t v;
+    uint16_t mode = (uint16_t)u32(s + 16);
+    memset(x, 0, 256);
+    v = 0x7ff; memcpy(x, &v, 4);                                   /* stx_mask */
+    memcpy(x + 4, s + 56, 4);                                      /* blksize */
+    memcpy(x + 16, s + 20, 4);                                     /* nlink */
+    memcpy(x + 20, s + 24, 8);                                     /* uid, gid */
+    memcpy(x + 28, &mode, 2);
+    memcpy(x + 32, s + 8, 8);                                      /* ino */
+    memcpy(x + 40, s + 48, 8);                                     /* size */
+    memcpy(x + 48, s + 64, 8);                                     /* blocks */
+    memcpy(x + 64, s + 72, 8); memcpy(x + 72, s + 80, 4);          /* atime */
+    memcpy(x + 80, s + 104, 8); memcpy(x + 88, s + 112, 4);        /* btime: ctime's */
+    memcpy(x + 96, s + 104, 8); memcpy(x + 104, s + 112, 4);       /* ctime */
+    memcpy(x + 112, s + 88, 8); memcpy(x + 120, s + 96, 4);        /* mtime */
+    v = (uint32_t)((rdev >> 8) & 0xfff); memcpy(x + 128, &v, 4);
+    v = (uint32_t)((rdev & 0xff) | ((rdev >> 12) & 0xfff00)); memcpy(x + 132, &v, 4);
+    v = (uint32_t)((dev >> 8) & 0xfff); memcpy(x + 136, &v, 4);
+    v = (uint32_t)((dev & 0xff) | ((dev >> 12) & 0xfff00)); memcpy(x + 140, &v, 4);
+}
+
+static uint64_t tty_read(struct aoi_proc *p, struct aoi_proc_fd *f, uint64_t buf, uint64_t n)
+{
+    static _Thread_local char b[16384];
+    long k;
+    if (!aoi_console) return 0;
+    if (!n) return 0;
+    k = aoi_tty_read(aoi_console, b, n < sizeof b ? n : sizeof b);
+    if (k < 0) return f->nonblock ? err(L_EAGAIN) : block_and_retry(p, 5000000);
+    return put(p, buf, b, (uint64_t)k) ? (uint64_t)k : err(L_EFAULT);
+}
+
+static uint64_t tty_write(struct aoi_proc *p, uint64_t buf, uint64_t n)
+{
+    static _Thread_local char b[16384];
+    uint64_t done = 0;
+    while (done < n) {
+        uint64_t k = n - done < sizeof b ? n - done : sizeof b;
+        if (!get(p, buf + done, b, k)) return done ? done : err(L_EFAULT);
+        if (aoi_console) aoi_tty_write(aoi_console, b, (size_t)k);
+        else if (write(1, b, (size_t)k) < 0) break;
+        done += k;
+    }
+    return done;
+}
+
+static uint64_t tty_ioctl(struct aoi_proc *p, struct aoi_proc_fd *f, uint64_t req, uint64_t arg)
+{
+    uint8_t tio[44];
+    uint16_t ws[4];
+    int32_t v;
+    if (!aoi_console) return err(L_ENOTTY);
+    switch (req) {
+    case 0x5401: aoi_tty_get(aoi_console, tio); return put(p, arg, tio, 36) ? 0 : err(L_EFAULT);   /* TCGETS */
+    case 0x802c542a: aoi_tty_get(aoi_console, tio); return put(p, arg, tio, 44) ? 0 : err(L_EFAULT);   /* TCGETS2 */
+    case 0x5402: case 0x5403: case 0x5404:                         /* TCSETS, TCSETSW, TCSETSF */
+        if (!get(p, arg, tio, 36)) return err(L_EFAULT);
+        aoi_tty_set(aoi_console, tio, 36, req == 0x5404);
+        return 0;
+    case 0x402c542b: case 0x402c542c: case 0x402c542d:             /* TCSETS2, TCSETSW2, TCSETSF2 */
+        if (!get(p, arg, tio, 44)) return err(L_EFAULT);
+        aoi_tty_set(aoi_console, tio, 44, req == 0x402c542d);
+        return 0;
+    case 0x5413: aoi_tty_winsize(aoi_console, ws); return put(p, arg, ws, 8) ? 0 : err(L_EFAULT);   /* TIOCGWINSZ */
+    case 0x5414:                                                   /* TIOCSWINSZ */
+        if (!get(p, arg, ws, 8)) return err(L_EFAULT);
+        aoi_tty_set_winsize(aoi_console, ws);
+        return 0;
+    case 0x540f: v = aoi_tty_pgrp ? aoi_tty_pgrp : p->pgid; return put(p, arg, &v, 4) ? 0 : err(L_EFAULT);   /* TIOCGPGRP */
+    case 0x5410:                                                   /* TIOCSPGRP */
+        if (!get(p, arg, &v, 4)) return err(L_EFAULT);
+        aoi_tty_pgrp = v;
+        if (p->trace) fprintf(p->trace, "[tty] foreground group %d\n", v);
+        return 0;
+    case 0x5429: v = p->sid; return put(p, arg, &v, 4) ? 0 : err(L_EFAULT);   /* TIOCGSID */
+    case 0x540e: case 0x5422: case 0x540a: case 0x5409: case 0x5425: return 0;   /* TIOCSCTTY, TIOCNOTTY, TCXONC, TCSBRK(P) */
+    case 0x540b: if (arg != 1) aoi_tty_flush(aoi_console); return 0;   /* TCFLSH: input (or both) */
+    case 0x541b: v = (int32_t)aoi_tty_pending(aoi_console); return put(p, arg, &v, 4) ? 0 : err(L_EFAULT);   /* FIONREAD */
+    case 0x5411: v = 0; return put(p, arg, &v, 4) ? 0 : err(L_EFAULT);   /* TIOCOUTQ */
+    case 0x5421: if (!get(p, arg, &v, 4)) return err(L_EFAULT); f->nonblock = v != 0; return 0;   /* FIONBIO */
+    case 0x80045430: v = 0; return put(p, arg, &v, 4) ? 0 : err(L_EFAULT);   /* TIOCGPTN */
+    default:
+        if (p->trace) fprintf(p->trace, "[tty] ioctl %#llx not implemented\n", (unsigned long long)req);
+        return err(L_EINVAL);
+    }
+}
+
+void aoi_proc_attach_tty(struct aoi_proc *p)
+{
+    int i;
+    for (i = 0; i < 3; i++) {
+        int h = open("/dev/null", O_RDWR | O_CLOEXEC);
+        if (h < 0) continue;
+        if (p->fd[i].used && p->fd[i].host > 2) close(p->fd[i].host);
+        p->fd[i].used = 1;
+        p->fd[i].host = h;
+        p->fd[i].kind = AOI_FD_TTY;
+        p->fd[i].nonblock = 0;
+        p->fd[i].cloexec = 0;
+        snprintf(p->fd[i].path, AOI_PATH, "/dev/pts/0");
+    }
+}
+
+static uint64_t sys_ppoll(struct aoi_proc *p, uint64_t fds, uint64_t nfds, uint64_t tsp)
+{
+    uint64_t i, n = 0;
+    int64_t timeout = -1;
+    if (nfds > 4096) return err(L_EINVAL);
+    if (tsp) {
+        uint8_t ts[16];
+        if (!get(p, tsp, ts, 16)) return err(L_EFAULT);
+        timeout = (int64_t)u64(ts) * 1000000000 + (int64_t)u64(ts + 8);
+    }
+    for (i = 0; i < nfds; i++) {
+        uint8_t pf[8];
+        int32_t fd;
+        uint16_t want, rev;
+        if (!get(p, fds + 8 * i, pf, 8)) return err(L_EFAULT);
+        memcpy(&fd, pf, 4); want = u16(pf + 4);
+        if (fd < 0) rev = 0;
+        else if (!fd_get(p, (uint64_t)fd)) rev = 0x20;             /* POLLNVAL */
+        else rev = (uint16_t)fd_ready(p, fd, want);
+        memcpy(pf + 6, &rev, 2);
+        if (!put(p, fds + 8 * i + 6, pf + 6, 2)) return err(L_EFAULT);
+        if (rev) n++;
+    }
+    if (n || timeout == 0) { p->th[p->cur].poll_deadline = 0; return n; }
+    poll_wait(p, timeout);
+    return 0;
+}
+
+static uint64_t sys_getdents64(struct aoi_proc *p, struct aoi_proc_fd *f, uint64_t buf, uint64_t n)
+{
+    uint64_t used = 0;
+    struct dirent *de;
+    if (!f->dir) {
+        int d = dup(f->host);
+        if (d < 0 || !(f->dir = fdopendir(d))) return herr();
+    }
+    for (;;) {
+        long pos = telldir(f->dir);
+        size_t nl, rec;
+        uint8_t ent[AOI_PATH + 32];
+        uint64_t ino, offv;
+        uint16_t reclen;
+        if (!(de = readdir(f->dir))) break;
+        nl = strlen(de->d_name);
+        rec = up(19 + nl + 1, 8);
+        if (used + rec > n) { seekdir(f->dir, pos); if (!used) return err(L_EINVAL); break; }
+        memset(ent, 0, rec);
+        ino = (uint64_t)de->d_ino; offv = (uint64_t)telldir(f->dir); reclen = (uint16_t)rec;
+        memcpy(ent, &ino, 8); memcpy(ent + 8, &offv, 8); memcpy(ent + 16, &reclen, 2);
+        ent[18] = de->d_type;                                    /* DT_* values match Linux */
+        memcpy(ent + 19, de->d_name, nl);
+        if (!put(p, buf + used, ent, rec)) return err(L_EFAULT);
+        used += rec;
+    }
+    return used;
+}
+
+/* logd emulation: liblog writes one packet per writev to /dev/socket/logdw:
+ * header { u8 log_id; u16 tid; u32 sec; u32 nsec } then, for text logs,
+ * u8 priority, tag\0, message. Printed as "P/tag: message". */
+static uint64_t logd_write(struct aoi_proc *p, const uint8_t *pkt, uint64_t n)
+{
+    static const char prio[] = "??VDIWEF";
+    const char *tag, *msg;
+    if (n < 12 || !p->log) return n;
+    if (pkt[0] == 2 || pkt[0] == 3 || pkt[0] == 6 || pkt[0] == 7) return n;   /* binary event buffers */
+    tag = (const char *)pkt + 12;
+    msg = memchr(tag, 0, (size_t)(n - 12)) ? tag + strlen(tag) + 1 : NULL;
+    if (!msg || msg >= (const char *)pkt + n) return n;
+    fprintf(p->log, "%c/%s: %.*s\n", pkt[11] < 8 ? prio[pkt[11]] : '?', tag,
+            (int)((const char *)pkt + n - msg), msg);
+    fflush(p->log);
+    return n;
+}
+
+/* ---------- the network: AF_INET/AF_INET6 on host sockets, DNS for netd's clients ----------
+ * A guest socket is a host socket, non-blocking underneath: a blocking call that
+ * would wait sleeps the thread and runs again (block_and_retry), as pipes do, and
+ * poll/epoll ask the host socket. Addresses are translated (Darwin's sockaddrs start
+ * with a length byte, and AF_INET6 is 30 there). bionic resolves names through netd:
+ * it writes "getaddrinfo host service flags family socktype protocol netid" to
+ * /dev/socket/dnsproxyd and reads netd's answer, which here comes from the host's
+ * getaddrinfo. (libnetd_client also tags each socket through netd's fwmarkd: the
+ * guest runs with ANDROID_NO_USE_FWMARK_CLIENT, so it does not.) */
+
+static const uint8_t v4mapped[12] = { 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0xff, 0xff };
+
+/* v4: the host socket is AF_INET, so a v4-mapped AF_INET6 address (::ffff:a.b.c.d)
+ * becomes AF_INET; any other AF_INET6 address is unreachable (-2). */
+static int sa_from_guest(const uint8_t *s, uint64_t n, struct sockaddr_storage *h, socklen_t *hl, int v4)
+{
+    uint16_t fam = (uint16_t)(s[0] | s[1] << 8);
+    uint8_t m[16];
+    memset(h, 0, sizeof *h);
+    if (v4 && fam == 10 && n >= 24) {
+        if (memcmp(s + 8, v4mapped, 12) && memcmp(s + 8, "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0", 16)) return -2;
+        memset(m, 0, sizeof m);
+        m[0] = 2; memcpy(m + 2, s + 2, 2); memcpy(m + 4, s + 20, 4);   /* (:: is INADDR_ANY) */
+        s = m; n = 16; fam = 2;
+    }
+    if (fam == 2 && n >= 8) {
+        struct sockaddr_in *a = (struct sockaddr_in *)h;
+        a->sin_family = AF_INET;
+        memcpy(&a->sin_port, s + 2, 2); memcpy(&a->sin_addr, s + 4, 4);
+#ifdef __APPLE__
+        a->sin_len = sizeof *a;
+#endif
+        *hl = sizeof *a;
+        return 0;
+    }
+    if (fam == 10 && n >= 24) {
+        struct sockaddr_in6 *a = (struct sockaddr_in6 *)h;
+        a->sin6_family = AF_INET6;
+        memcpy(&a->sin6_port, s + 2, 2); memcpy(&a->sin6_flowinfo, s + 4, 4); memcpy(&a->sin6_addr, s + 8, 16);
+        if (n >= 28) memcpy(&a->sin6_scope_id, s + 24, 4);
+#ifdef __APPLE__
+        a->sin6_len = sizeof *a;
+#endif
+        *hl = sizeof *a;
+        return 0;
+    }
+    return -1;
+}
+
+/* A host address as Linux lays it out: 16 or 28 bytes (0: not INET). */
+static uint32_t sa_to_guest(const struct sockaddr *h, uint8_t *s, int v4)
+{
+    memset(s, 0, 28);
+    if (v4 && h->sa_family == AF_INET) {                           /* as ::ffff:a.b.c.d */
+        const struct sockaddr_in *a = (const struct sockaddr_in *)(const void *)h;
+        s[0] = 10; memcpy(s + 2, &a->sin_port, 2); memcpy(s + 8, v4mapped, 12); memcpy(s + 20, &a->sin_addr, 4);
+        return 28;
+    }
+    if (h->sa_family == AF_INET) {
+        const struct sockaddr_in *a = (const struct sockaddr_in *)(const void *)h;
+        s[0] = 2; memcpy(s + 2, &a->sin_port, 2); memcpy(s + 4, &a->sin_addr, 4);
+        return 16;
+    }
+    if (h->sa_family == AF_INET6) {
+        const struct sockaddr_in6 *a = (const struct sockaddr_in6 *)(const void *)h;
+        s[0] = 10; memcpy(s + 2, &a->sin6_port, 2); memcpy(s + 4, &a->sin6_flowinfo, 4);
+        memcpy(s + 8, &a->sin6_addr, 16); memcpy(s + 24, &a->sin6_scope_id, 4);
+        return 28;
+    }
+    return 0;
+}
+
+/* accept/recvfrom/getsockname's (addr, *addrlen) out-parameters. */
+static void put_sa(struct aoi_proc *p, uint64_t addr, uint64_t lenp, const struct sockaddr *h, int v4)
+{
+    uint8_t s[28];
+    uint32_t n = sa_to_guest(h, s, v4), cap;
+    if (!addr || !lenp || !get(p, lenp, &cap, 4)) return;
+    if (n) put(p, addr, s, n < cap ? n : cap);
+    put(p, lenp, &n, 4);
+}
+
+static int get_sa(struct aoi_proc *p, uint64_t addr, uint64_t len, struct sockaddr_storage *h, socklen_t *hl, int v4)
+{
+    uint8_t s[28];
+    memset(s, 0, sizeof s);
+    if (len < 8 || !get(p, addr, s, len < sizeof s ? len : sizeof s)) return -1;
+    return sa_from_guest(s, len, h, hl, v4);
+}
+
+static uint64_t sa_err(int e) { return err(e == -2 ? L_ENETUNREACH : L_EAFNOSUPPORT); }
+
+static int msg_flags(uint64_t f)                                   /* Linux MSG_* -> host */
+{
+    int h = 0;
+    if (f & 1) h |= MSG_OOB;
+    if (f & 2) h |= MSG_PEEK;
+#ifdef MSG_NOSIGNAL
+    h |= MSG_NOSIGNAL;                                             /* (Darwin: SO_NOSIGPIPE on the socket) */
+#endif
+    return h;
+}
+
+/* EAGAIN on a blocking guest socket: sleep and run the call again. */
+static uint64_t net_wait(struct aoi_proc *p, struct aoi_proc_fd *f, uint64_t r, uint64_t flags)
+{
+    if (r == err(L_EAGAIN) && !f->nonblock && !(flags & 0x40)) return block_and_retry(p, 1000000);   /* MSG_DONTWAIT */
+    return r;
+}
+
+static _Thread_local uint8_t net_buf[256 * 1024];                              /* one host thread runs the guest */
+
+static void host_sock_setup(int h)
+{
+    int one = 1;
+    fcntl(h, F_SETFL, O_NONBLOCK);
+    fcntl(h, F_SETFD, FD_CLOEXEC);
+#ifdef SO_NOSIGPIPE
+    setsockopt(h, SOL_SOCKET, SO_NOSIGPIPE, &one, sizeof one);
+#endif
+    (void)one;
+}
+
+static uint64_t net_socket(struct aoi_proc *p, uint64_t fam, uint64_t type, uint64_t proto)
+{
+    int t = (int)(type & 0xf), h, n, v4 = 0;
+    if (t != 1 && t != 2) return err(L_EPROTONOSUPPORT);
+    h = socket(fam == 2 ? AF_INET : AF_INET6, t == 1 ? SOCK_STREAM : SOCK_DGRAM, (int)proto);
+    if (h < 0 && fam == 10 && (h = socket(AF_INET, t == 1 ? SOCK_STREAM : SOCK_DGRAM, (int)proto)) >= 0) v4 = 1;
+    if (h < 0) return herr();                                      /* (a host without IPv6: v4 only) */
+    host_sock_setup(h);
+    if ((n = fd_new(p, h, fam == 2 ? "socket:[inet]" : "socket:[inet6]", 0)) < 0) { close(h); return err(L_EMFILE); }
+    p->fd[n].kind = AOI_FD_INET;
+    p->fd[n].nonblock = (type & 04000) != 0;                       /* SOCK_NONBLOCK */
+    p->fd[n].v4 = v4;
+    return (uint64_t)n;
+}
+
+static uint64_t net_connect(struct aoi_proc *p, struct aoi_proc_fd *f, uint64_t addr, uint64_t len)
+{
+    struct sockaddr_storage sa;
+    socklen_t sl;
+    int e0;
+    if (f->connecting) {                                           /* a blocking connect, run again */
+        struct pollfd pf;
+        int e = 0;
+        socklen_t el = sizeof e;
+        pf.fd = f->host; pf.events = POLLOUT; pf.revents = 0;
+        if (poll(&pf, 1, 0) <= 0) return block_and_retry(p, 1000000);
+        f->connecting = 0;
+        getsockopt(f->host, SOL_SOCKET, SO_ERROR, &e, &el);
+        return e ? err(lx_errno(e)) : 0;
+    }
+    if ((e0 = get_sa(p, addr, len, &sa, &sl, f->v4))) return sa_err(e0);
+    if (!connect(f->host, (struct sockaddr *)&sa, sl)) return 0;
+    if (errno != EINPROGRESS) return herr();
+    if (f->nonblock) return err(L_EINPROGRESS);
+    f->connecting = 1;
+    return block_and_retry(p, 1000000);
+}
+
+static uint64_t net_accept(struct aoi_proc *p, struct aoi_proc_fd *f, uint64_t addr, uint64_t lenp, uint64_t flags)
+{
+    struct sockaddr_storage sa;
+    socklen_t sl = sizeof sa;
+    int h = accept(f->host, (struct sockaddr *)&sa, &sl), n;
+    if (h < 0) return net_wait(p, f, herr(), 0);
+    host_sock_setup(h);
+    if ((n = fd_new(p, h, f->path, 0)) < 0) { close(h); return err(L_EMFILE); }
+    p->fd[n].kind = AOI_FD_INET;
+    p->fd[n].nonblock = (flags & 04000) != 0;
+    p->fd[n].v4 = f->v4;
+    put_sa(p, addr, lenp, (struct sockaddr *)&sa, f->v4);
+    return (uint64_t)n;
+}
+
+static uint64_t net_sendto(struct aoi_proc *p, struct aoi_proc_fd *f, uint64_t buf, uint64_t len,
+                           uint64_t flags, uint64_t addr, uint64_t alen)
+{
+    struct sockaddr_storage sa;
+    socklen_t sl = 0;
+    ssize_t k;
+    int e0;
+    if (len > sizeof net_buf) len = sizeof net_buf;               /* a short send, as a full buffer gives */
+    if (len && !get(p, buf, net_buf, len)) return err(L_EFAULT);
+    if (addr && alen && (e0 = get_sa(p, addr, alen, &sa, &sl, f->v4))) return sa_err(e0);
+    k = sl ? sendto(f->host, net_buf, (size_t)len, msg_flags(flags), (struct sockaddr *)&sa, sl)
+           : send(f->host, net_buf, (size_t)len, msg_flags(flags));
+    return k < 0 ? net_wait(p, f, herr(), flags) : (uint64_t)k;
+}
+
+static uint64_t net_recvfrom(struct aoi_proc *p, struct aoi_proc_fd *f, uint64_t buf, uint64_t len,
+                             uint64_t flags, uint64_t addr, uint64_t lenp)
+{
+    struct sockaddr_storage sa;
+    socklen_t sl = sizeof sa;
+    ssize_t k;
+    if (len > sizeof net_buf) len = sizeof net_buf;
+    memset(&sa, 0, sizeof sa);
+    k = recvfrom(f->host, net_buf, (size_t)len, msg_flags(flags), (struct sockaddr *)&sa, &sl);
+    if (k < 0) return net_wait(p, f, herr(), flags);
+    if (k && !put(p, buf, net_buf, (uint64_t)k)) return err(L_EFAULT);
+    if (addr) { if (sl && sa.ss_family) put_sa(p, addr, lenp, (struct sockaddr *)&sa, f->v4); else { uint32_t z = 0; put(p, lenp, &z, 4); } }
+    return (uint64_t)k;
+}
+
+/* sendmsg/recvmsg: struct msghdr {name, namelen, iov, iovlen, control, controllen, flags}
+ * at 0, 8, 16, 24, 32, 40, 48; the iovecs gathered into one buffer, no control data. */
+static uint64_t net_msg(struct aoi_proc *p, struct aoi_proc_fd *f, uint64_t mp, uint64_t flags, int recv)
+{
+    uint8_t m[56];
+    uint64_t i, n = 0, iov, iovlen, r;
+    if (!get(p, mp, m, sizeof m)) return err(L_EFAULT);
+    iov = u64(m + 16); iovlen = u64(m + 24);
+    if (iovlen > 1024) return err(L_EINVAL);
+    if (!recv) {                                                   /* gather, then one sendto */
+        struct sockaddr_storage sa;
+        socklen_t sl = 0;
+        ssize_t k;
+        int e0;
+        for (i = 0; i < iovlen; i++) {
+            uint8_t e[16];
+            uint64_t b, l;
+            if (!get(p, iov + 16 * i, e, 16)) return err(L_EFAULT);
+            b = u64(e); l = u64(e + 8);
+            if (l > sizeof net_buf - n) l = sizeof net_buf - n;
+            if (l && !get(p, b, net_buf + n, l)) return err(L_EFAULT);
+            n += l;
+        }
+        if (u64(m) && u32(m + 8) && (e0 = get_sa(p, u64(m), u32(m + 8), &sa, &sl, f->v4))) return sa_err(e0);
+        k = sl ? sendto(f->host, net_buf, (size_t)n, msg_flags(flags), (struct sockaddr *)&sa, sl)
+               : send(f->host, net_buf, (size_t)n, msg_flags(flags));
+        return k < 0 ? net_wait(p, f, herr(), flags) : (uint64_t)k;
+    }
+    for (i = 0; i < iovlen; i++) {                                 /* room for all of it */
+        uint8_t e[16];
+        if (!get(p, iov + 16 * i, e, 16)) return err(L_EFAULT);
+        n += u64(e + 8);
+    }
+    {
+        struct sockaddr_storage sa;
+        socklen_t sl = sizeof sa;
+        ssize_t k;
+        uint64_t done = 0;
+        uint32_t z = 0;
+        if (n > sizeof net_buf) n = sizeof net_buf;
+        memset(&sa, 0, sizeof sa);
+        k = recvfrom(f->host, net_buf, (size_t)n, msg_flags(flags), (struct sockaddr *)&sa, &sl);
+        if (k < 0) return net_wait(p, f, herr(), flags);
+        for (i = 0; i < iovlen && done < (uint64_t)k; i++) {       /* scatter */
+            uint8_t e[16];
+            uint64_t l;
+            get(p, iov + 16 * i, e, 16);
+            l = u64(e + 8) < (uint64_t)k - done ? u64(e + 8) : (uint64_t)k - done;
+            if (l && !put(p, u64(e), net_buf + done, l)) return err(L_EFAULT);
+            done += l;
+        }
+        if (u64(m) && sl && sa.ss_family) {
+            uint8_t s[28];
+            uint32_t sn = sa_to_guest((struct sockaddr *)&sa, s, f->v4), cap = u32(m + 8);
+            if (sn) put(p, u64(m), s, sn < cap ? sn : cap);
+            put(p, mp + 8, &sn, 4);
+        } else put(p, mp + 8, &z, 4);
+        put(p, mp + 40, &z, 4); put(p, mp + 44, &z, 4);            /* no control data */
+        put(p, mp + 48, &z, 4);                                    /* msg_flags */
+        r = (uint64_t)k;
+    }
+    return r;
+}
+
+/* sendmsg/recvmsg on an AF_UNIX socketpair end, with SCM_RIGHTS: Chromium's mojo
+ * channels pass shared memory and new channels this way. The host fds travel in a host
+ * SCM_RIGHTS message (in order with the data); what the guest knows about each (its
+ * kind, path, pair...) waits in `inflight`, found again by the host file's identity. */
+static struct { dev_t dev; ino_t ino; struct aoi_proc_fd f; int used; } inflight[64];
+
+static uint64_t unix_msg(struct aoi_proc *p, struct aoi_proc_fd *f, uint64_t mp, uint64_t flags, int recv)
+{
+    uint8_t m[56], cg[1024];
+    uint64_t i, n = 0, iov, iovlen, ctl, ctllen;
+    union { struct cmsghdr h; uint8_t b[CMSG_SPACE(64 * sizeof(int))]; } hc;
+    struct iovec hv;
+    struct msghdr hm;
+    ssize_t k;
+    if (!get(p, mp, m, sizeof m)) return err(L_EFAULT);
+    iov = u64(m + 16); iovlen = u64(m + 24); ctl = u64(m + 32); ctllen = u64(m + 40);
+    if (iovlen > 1024) return err(L_EINVAL);
+    memset(&hm, 0, sizeof hm);
+    hm.msg_iov = &hv; hm.msg_iovlen = 1;
+    if (!recv) {
+        int hfd[64], nfd = 0;
+        for (i = 0; i < iovlen; i++) {                             /* gather */
+            uint8_t e[16];
+            uint64_t b, l;
+            if (!get(p, iov + 16 * i, e, 16)) return err(L_EFAULT);
+            b = u64(e); l = u64(e + 8);
+            if (l > sizeof net_buf - n) l = sizeof net_buf - n;
+            if (l && !get(p, b, net_buf + n, l)) return err(L_EFAULT);
+            n += l;
+        }
+        if (ctl && ctllen) {                                       /* the guest's cmsgs: SCM_RIGHTS */
+            uint64_t o = 0;
+            if (ctllen > sizeof cg) ctllen = sizeof cg;
+            if (!get(p, ctl, cg, ctllen)) return err(L_EFAULT);
+            while (o + 16 <= ctllen) {
+                uint64_t len = u64(cg + o);
+                uint32_t lvl = u32(cg + o + 8), type = u32(cg + o + 12), j;
+                if (len < 16 || o + len > ctllen) break;
+                if (lvl == 1 && type == 1)                         /* SOL_SOCKET, SCM_RIGHTS */
+                    for (j = 0; 16 + 4 * (j + 1) <= len && nfd < 64; j++) {
+                        struct aoi_proc_fd *g = fd_get(p, u32(cg + o + 16 + 4 * j));
+                        struct stat st;
+                        int s;
+                        if (!g) return err(L_EBADF);
+                        hfd[nfd++] = g->host;
+                        if (!fstat(g->host, &st)) {                /* its guest side, for the receiver */
+                            for (s = 0; s < 64 && inflight[s].used; s++) {}
+                            if (s == 64) s = (int)(st.st_ino % 64);
+                            inflight[s].used = 1; inflight[s].dev = st.st_dev; inflight[s].ino = st.st_ino;
+                            inflight[s].f = *g;
+                            if (g->kind == AOI_FD_EVENTFD) ev_ref(p, g, 1);   /* (held for the receiver) */
+                        }
+                    }
+                o += (len + 7) & ~(uint64_t)7;
+            }
+        }
+        hv.iov_base = net_buf; hv.iov_len = (size_t)n;
+        if (nfd) {
+            hm.msg_control = hc.b; hm.msg_controllen = CMSG_SPACE(nfd * sizeof(int));
+            hc.h.cmsg_level = SOL_SOCKET; hc.h.cmsg_type = SCM_RIGHTS; hc.h.cmsg_len = CMSG_LEN(nfd * sizeof(int));
+            memcpy(CMSG_DATA(&hc.h), hfd, nfd * sizeof(int));
+        }
+        k = sendmsg(f->host, &hm, msg_flags(flags));
+        if (p->trace && nfd) fprintf(p->trace, "[unix] sendmsg %zd bytes, %d fds -> %zd\n", (size_t)n, nfd, k);
+        return k < 0 ? net_wait(p, f, herr(), flags) : (uint64_t)k;
+    }
+    for (i = 0; i < iovlen; i++) {                                 /* room for all of it */
+        uint8_t e[16];
+        if (!get(p, iov + 16 * i, e, 16)) return err(L_EFAULT);
+        n += u64(e + 8);
+    }
+    if (n > sizeof net_buf) n = sizeof net_buf;
+    hv.iov_base = net_buf; hv.iov_len = (size_t)n;
+    hm.msg_control = hc.b; hm.msg_controllen = sizeof hc.b;
+    k = recvmsg(f->host, &hm, msg_flags(flags)
+#ifdef MSG_CMSG_CLOEXEC
+                | MSG_CMSG_CLOEXEC
+#endif
+                );
+    if (k < 0) return net_wait(p, f, herr(), flags);
+    {
+        uint64_t done = 0, gl = 0;
+        uint32_t z = 0, mflags = 0;
+        struct cmsghdr *c;
+        for (i = 0; i < iovlen && done < (uint64_t)k; i++) {       /* scatter */
+            uint8_t e[16];
+            uint64_t l;
+            get(p, iov + 16 * i, e, 16);
+            l = u64(e + 8) < (uint64_t)k - done ? u64(e + 8) : (uint64_t)k - done;
+            if (l && !put(p, u64(e), net_buf + done, l)) return err(L_EFAULT);
+            done += l;
+        }
+        for (c = CMSG_FIRSTHDR(&hm); c; c = CMSG_NXTHDR(&hm, c)) {
+            int nf, j, *hf;
+            if (c->cmsg_level != SOL_SOCKET || c->cmsg_type != SCM_RIGHTS) continue;
+            nf = (int)((c->cmsg_len - CMSG_LEN(0)) / sizeof(int));
+            hf = (int *)CMSG_DATA(c);
+            if (gl + 16 + 4 * (uint64_t)nf > ctllen || gl + 16 > sizeof cg) {   /* no room: dropped */
+                for (j = 0; j < nf; j++) close(hf[j]);
+                mflags |= 8;                                       /* MSG_CTRUNC */
+                continue;
+            }
+            {
+                uint64_t len = 16 + 4 * (uint64_t)nf;
+                uint32_t one = 1;
+                memcpy(cg + gl, &len, 8); memcpy(cg + gl + 8, &one, 4); memcpy(cg + gl + 12, &one, 4);
+                for (j = 0; j < nf; j++) {
+                    struct stat st;
+                    int g, s;
+                    fcntl(hf[j], F_SETFD, FD_CLOEXEC);
+                    if ((g = fd_new(p, hf[j], "socket:[pair]", 0)) < 0) { close(hf[j]); g = -1; }
+                    else if (!fstat(hf[j], &st)) {
+                        for (s = 0; s < 64 && !(inflight[s].used && inflight[s].dev == st.st_dev && inflight[s].ino == st.st_ino); s++) {}
+                        if (s < 64) {
+                            struct aoi_proc_fd *t = &p->fd[g], *o = &inflight[s].f;
+                            t->kind = o->kind; t->nonblock = o->nonblock; t->seals = o->seals; t->count = o->count;
+                            t->sem = o->sem; t->pair = o->pair; t->end = o->end; t->ptype = o->ptype;
+                            t->tnext = o->tnext; t->tint = o->tint; t->tclock = o->tclock; t->evid = o->evid;
+                            if (t->kind == AOI_FD_EPOLL || t->kind == AOI_FD_DNS) t->kind = AOI_FD_FILE;   /* (their state stays) */
+                            join(t->path, AOI_PATH, "", o->path);
+                            inflight[s].used = 0;
+                        }
+                    }
+                    if (p->trace) fprintf(p->trace, "[unix] recvmsg fd %d (%s, kind %d)\n", g, g >= 0 ? p->fd[g].path : "-", g >= 0 ? p->fd[g].kind : -1);
+                    memcpy(cg + gl + 16 + 4 * (uint64_t)j, &g, 4);
+                }
+                gl += (len + 7) & ~(uint64_t)7;
+            }
+        }
+        if (ctl && gl && !put(p, ctl, cg, gl)) return err(L_EFAULT);
+        put(p, mp + 8, &z, 4);                                     /* no address */
+        { uint64_t g64 = gl; put(p, mp + 40, &g64, 8); }           /* msg_controllen */
+        if (hm.msg_flags & MSG_TRUNC) mflags |= 0x20;
+        if (hm.msg_flags & MSG_CTRUNC) mflags |= 8;
+        put(p, mp + 48, &mflags, 4);
+    }
+    return (uint64_t)k;
+}
+
+/* The options worth passing on; anything else is accepted (set) or 0 (get). */
+static int sockopt_host(uint64_t level, uint64_t opt, int *hl, int *ho)
+{
+    if (level == 1) {                                              /* SOL_SOCKET */
+        *hl = SOL_SOCKET;
+        switch (opt) {
+        case 2: *ho = SO_REUSEADDR; return 1;
+        case 3: *ho = SO_TYPE; return 1;
+        case 4: *ho = SO_ERROR; return 1;
+        case 6: *ho = SO_BROADCAST; return 1;
+        case 7: *ho = SO_SNDBUF; return 1;
+        case 8: *ho = SO_RCVBUF; return 1;
+        case 9: *ho = SO_KEEPALIVE; return 1;
+        case 15: *ho = SO_REUSEPORT; return 1;
+        default: return 0;
+        }
+    }
+    if (level == 6 && opt == 1) { *hl = IPPROTO_TCP; *ho = TCP_NODELAY; return 1; }
+    if (level == 41 && opt == 26) { *hl = IPPROTO_IPV6; *ho = IPV6_V6ONLY; return 1; }   /* (ignored on a v4 one) */
+    return 0;
+}
+
+static uint64_t net_sockopt(struct aoi_proc *p, struct aoi_proc_fd *f, uint64_t level, uint64_t opt,
+                            uint64_t val, uint64_t len, int set)
+{
+    int hl, ho, v = 0;
+    socklen_t vl = sizeof v;
+    if (set) {
+        if (!sockopt_host(level, opt, &hl, &ho) || len < 4 || !get(p, val, &v, 4)) return 0;
+        if (f->v4 && hl != SOL_SOCKET && hl != IPPROTO_TCP) return 0;
+        return setsockopt(f->host, hl, ho, &v, sizeof v) ? herr() : 0;
+    }
+    if (sockopt_host(level, opt, &hl, &ho)) {
+        if (getsockopt(f->host, hl, ho, &v, &vl)) return herr();
+        if (ho == SO_ERROR) v = v ? lx_errno(v) : 0;
+        if (ho == SO_TYPE) v = v == SOCK_STREAM ? 1 : v == SOCK_DGRAM ? 2 : v;
+    }
+    vl = 4;
+    if (val) put(p, val, &v, 4);
+    if (len) put(p, len, &vl, 4);
+    return 0;
+}
+
+/* /dev/socket/dnsproxyd: the request up to its NUL, then netd's answer ("222\0", per
+ * address {BE32 1, flags, family, socktype, protocol, BE32 len + sockaddr, BE32 len +
+ * canonical name}, BE32 0) into the host pair the guest reads. */
+static void be32(uint8_t *o, uint32_t v) { o[0] = (uint8_t)(v >> 24); o[1] = (uint8_t)(v >> 16); o[2] = (uint8_t)(v >> 8); o[3] = (uint8_t)v; }
+
+static void dns_answer(struct aoi_proc *p, struct aoi_proc_fd *f)
+{
+    char host[256], serv[64];
+    int flags = -1, fam = 0, type = 0, proto = 0;
+    struct addrinfo hints, *res = NULL, *ai;
+    static _Thread_local uint8_t out[16384];
+    size_t n = 0;
+    int rc = -1;
+    if (sscanf(f->req, "getaddrinfo %255s %63s %d %d %d %d", host, serv, &flags, &fam, &type, &proto) == 6) {
+        memset(&hints, 0, sizeof hints);
+        hints.ai_family = fam == 2 ? AF_INET : fam == 10 ? AF_INET6 : AF_UNSPEC;
+        hints.ai_socktype = type == 1 ? SOCK_STREAM : type == 2 ? SOCK_DGRAM : 0;
+        hints.ai_protocol = proto > 0 ? proto : 0;
+        if (flags != -1)
+            hints.ai_flags = (flags & 1 ? AI_PASSIVE : 0) | (flags & 2 ? AI_CANONNAME : 0)
+                           | (flags & 4 ? AI_NUMERICHOST : 0) | (flags & 0x400 ? AI_NUMERICSERV : 0);
+        rc = getaddrinfo(strcmp(host, "^") ? host : NULL, strcmp(serv, "^") ? serv : NULL, &hints, &res);
+        if (p->log) fprintf(p->log, "I/aoi: dns %s: %s\n", host, rc ? gai_strerror(rc) : "ok");
+    } else if (p->log) fprintf(p->log, "I/aoi: dns: not answered: %.60s\n", f->req);
+    if (!rc) {
+        memcpy(out, "222", 4); n = 4;
+        for (ai = res; ai && n + 512 < sizeof out; ai = ai->ai_next) {
+            uint8_t s[28];
+            uint32_t sl = sa_to_guest(ai->ai_addr, s, 0), cl = ai->ai_canonname ? (uint32_t)strlen(ai->ai_canonname) + 1 : 0;
+            if (!sl || cl > 255) continue;
+            be32(out + n, 1); be32(out + n + 4, 0);
+            be32(out + n + 8, ai->ai_family == AF_INET ? 2 : 10);
+            be32(out + n + 12, ai->ai_socktype == SOCK_DGRAM ? 2 : ai->ai_socktype == SOCK_STREAM ? 1 : (uint32_t)ai->ai_socktype);
+            be32(out + n + 16, (uint32_t)ai->ai_protocol);
+            be32(out + n + 20, sl); memcpy(out + n + 24, s, sl); n += 24 + sl;
+            be32(out + n, cl); if (cl) memcpy(out + n + 4, ai->ai_canonname, cl); n += 4 + cl;
+        }
+        be32(out + n, 0); n += 4;
+        freeaddrinfo(res);
+    } else {
+        memcpy(out, "401", 4); be32(out + 4, 4); be32(out + 8, 7); n = 12;   /* DnsProxyOperationFailed, EAI_NODATA */
+    }
+    if (write(f->peer, out, n) < 0) {}
+    close(f->peer);
+    f->peer = -1;
+}
+
+static uint64_t dns_write(struct aoi_proc *p, struct aoi_proc_fd *f, uint64_t buf, uint64_t len)
+{
+    uint64_t i;
+    if (!f->req && !(f->req = calloc(1, 1024))) return err(L_ENOMEM);
+    for (i = 0; i < len; i++) {
+        uint8_t c;
+        if (!get(p, buf + i, &c, 1)) return err(L_EFAULT);
+        if (f->peer < 0) continue;                                 /* answered: the rest is dropped */
+        if (f->nreq < 1023) f->req[f->nreq++] = (char)c;
+        if (!c) dns_answer(p, f);
+    }
+    return len;
+}
+
+/* connect() to netd's DNS socket: a host pair, the guest reading one end. */
+static uint64_t dns_open(struct aoi_proc *p, struct aoi_proc_fd *f)
+{
+    int hv[2];
+    if (socketpair(AF_UNIX, SOCK_STREAM, 0, hv)) return herr();
+    fcntl(hv[0], F_SETFL, O_NONBLOCK); fcntl(hv[0], F_SETFD, FD_CLOEXEC); fcntl(hv[1], F_SETFD, FD_CLOEXEC);
+    close(f->host);
+    f->host = hv[0]; f->peer = hv[1];
+    f->kind = AOI_FD_DNS; f->nreq = 0;
+    (void)p;
+    return 0;
+}
+
+/* O_CLOEXEC and its kin on a new fd: the guest's close-on-exec flag (the host's fds are
+ * all FD_CLOEXEC; this one decides what a child's execve keeps). */
+static void note_cloexec(struct aoi_proc *p, uint64_t nr, uint64_t a0, uint64_t a1, uint64_t a2, uint64_t a3, uint64_t r)
+{
+    int32_t two[2];
+    int on = -1, k;
+    switch (nr) {
+    case 56: on = (a2 & 02000000) != 0; break;                     /* openat */
+    case 198: case 85: case 19: on = (a1 & 02000000) != 0; break;  /* socket, timerfd_create, eventfd2 */
+    case 20: on = (a0 & 02000000) != 0; break;                     /* epoll_create1 */
+    case 279: on = (a1 & 1) != 0; break;                           /* memfd_create: MFD_CLOEXEC */
+    case 24: on = (a2 & 02000000) != 0; break;                     /* dup3 */
+    case 242: on = (a3 & 02000000) != 0; break;                    /* accept4 */
+    case 25: if (a1 == 1030) on = 1; break;                        /* fcntl F_DUPFD_CLOEXEC */
+    case 59: case 199:                                             /* pipe2, socketpair: two fds */
+        if (((nr == 59 ? a1 : a1) & 02000000) && get(p, nr == 59 ? a0 : a3, two, 8))
+            for (k = 0; k < 2; k++) if (two[k] >= 0 && two[k] < AOI_PROC_FDS) p->fd[two[k]].cloexec = 1;
+        return;
+    default: return;
+    }
+    if (on > 0 && r < AOI_PROC_FDS) p->fd[r].cloexec = 1;
+}
+
+/* ---------- child processes: vfork, execve, wait (Runtime.exec) ----------
+ * Java starts a program with vfork() and execve() (libopenjdk's childproc.c; bionic's
+ * posix_spawn too). The child runs here as vfork's does: in the parent's memory, on the calling thread,
+ * while the process's other threads wait (schedule). It has a copy of the fd table,
+ * so its dup2s and closes are its own. Its execve starts the program as a guest
+ * process of its own on a host thread (struct aoi_child), with the fds it did not
+ * mark close-on-exec; the parent then returns from vfork with the child's pid.
+ * wait4/waitid and kill reach the child by that pid. */
+
+
+struct aoi_child {
+    int pid;
+    volatile int done, status;                  /* wait4's status: code << 8, or the signal */
+    volatile int orphan;                        /* the parent went first: the thread frees this */
+    struct aoi_proc *proc;
+};
+
+static uint64_t vfork_start(struct aoi_proc *p, struct aoi_cpu *c, uint64_t stack)
+{
+    struct aoi_vfork *v;
+    int i;
+    if (p->vf) return err(L_EAGAIN);
+    if (!(v = malloc(sizeof *v))) return err(L_ENOMEM);
+    if (p->next_pid < 20000) p->next_pid = 20000;
+    v->thread = p->cur; v->pid = p->linux_mode ? lx_newpid() : p->next_pid++;
+    v->cpu = *c; v->sigmask = p->th[p->cur].sigmask;
+    if (stack) c->sp = stack;                                      /* musl/glibc posix_spawn: the child's own stack */
+    v->pgid = p->pgid;
+    memcpy(v->sigact, p->sigact, sizeof v->sigact);
+    memcpy(v->cwd, p->cwd, sizeof v->cwd);
+    memcpy(v->fd, p->fd, sizeof v->fd);
+    for (i = 0; i < AOI_PROC_FDS; i++) {                           /* the child's own copies */
+        struct aoi_proc_fd *f = &p->fd[i];
+        if (!f->used) continue;
+        f->dir = NULL; f->req = NULL; f->nreq = 0;
+        if (f->kind == AOI_FD_DNS) { f->kind = AOI_FD_FILE; f->peer = -1; }
+        if ((f->host = dup(v->fd[i].host)) < 0) { f->used = 0; continue; }
+        if (f->kind == AOI_FD_EPOLL && f->ep) f->ep->refs++;
+        if (f->kind == AOI_FD_EVENTFD) ev_ref(p, f, 1);
+    }
+    p->vf = v;
+    if (p->trace) fprintf(p->trace, "[proc] vfork: child %d\n", v->pid);
+    return 0;                                                      /* the child returns 0 */
+}
+
+/* The child execs or exits: its fds go, and the parent returns from vfork with `ret`. */
+static void vfork_end(struct aoi_proc *p, struct aoi_cpu *c, uint64_t ret)
+{
+    struct aoi_vfork *v = p->vf;
+    int i;
+    for (i = 0; i < AOI_PROC_FDS; i++) {
+        struct aoi_proc_fd *f = &p->fd[i];
+        if (!f->used) continue;
+        if (f->dir) closedir(f->dir); else close(f->host);
+        if (f->kind == AOI_FD_EPOLL) epoll_unref(f->ep);
+        if (f->kind == AOI_FD_EVENTFD) ev_ref(p, f, -1);
+        free(f->req);
+    }
+    memcpy(p->fd, v->fd, sizeof p->fd);
+    p->th[v->thread].sigmask = v->sigmask;
+    memcpy(p->sigact, v->sigact, sizeof p->sigact);
+    memcpy(p->cwd, v->cwd, sizeof p->cwd);
+    memcpy(c->x, v->cpu.x, sizeof c->x);
+    memcpy(c->vreg, v->cpu.vreg, sizeof c->vreg);
+    c->sp = v->cpu.sp; c->n = v->cpu.n; c->z = v->cpu.z; c->c = v->cpu.c; c->v = v->cpu.v;
+    c->fpcr = v->cpu.fpcr; c->fpsr = v->cpu.fpsr; c->tpidr = v->cpu.tpidr;
+    c->x[0] = ret;
+    c->pc = v->cpu.pc + 4;                                         /* after the vfork's svc */
+    c->excl_valid = 0;
+    c->stop = AOI_STOP_NEWPC;
+    p->vf = NULL;
+    free(v);
+}
+
+static struct aoi_child *child_new(struct aoi_proc *p)
+{
+    struct aoi_child **t, *ch;
+    int i;
+    for (i = 0; i < p->nchild && p->child[i]; i++) {}
+    if (i == p->nchild) {
+        if (!(t = realloc(p->child, sizeof *t * (size_t)(p->nchild + 8)))) return NULL;
+        memset(t + p->nchild, 0, sizeof *t * 8);
+        p->child = t; p->nchild += 8;
+    }
+    if (!(ch = calloc(1, sizeof *ch))) return NULL;
+    p->child[i] = ch;
+    return ch;
+}
+
+static void lx_post_pid(int pid, int sig);
+
+static void *child_main(void *arg)
+{
+    struct aoi_child *ch = arg;
+    struct aoi_proc *c = ch->proc;
+    int i, status, ppid = 0, linux_mode = 0;
+    for (;;) {
+        enum aoi_stop st = aoi_proc_run(c, c->cpu.steps + 50000000);
+        if (c->stop_request) { status = 9; break; }                /* killed (SIGKILL's status) */
+        if (st == AOI_RUN) continue;
+        status = st == AOI_STOP_EXIT ? (c->term_sig ? c->term_sig : (c->cpu.exit_code & 0xff) << 8)
+                                     : 11;                         /* a fault: as SIGSEGV */
+        if (st == AOI_STOP_UNDEF) status = 4;                      /* SIGILL */
+        if (st != AOI_STOP_EXIT && c->trace) {
+            char w1[256], w2[256];
+            fprintf(c->trace, "[proc] %d stopped (%d) at pc %s, lr %s, fault %#llx insn %#x\n", ch->pid, (int)st,
+                    aoi_proc_where(c, c->cpu.pc, w1, sizeof w1), aoi_proc_where(c, c->cpu.x[30], w2, sizeof w2),
+                    (unsigned long long)c->cpu.fault_addr, c->cpu.fault_insn);
+        }
+        break;
+    }
+    ppid = c->ppid;
+    linux_mode = c->linux_mode;
+    if (c->log) fprintf(c->log, "I/aoi: process %d ended: %s %d after %llu instructions\n", ch->pid,
+                        status & 0x7f ? "signal" : "exit", status & 0x7f ? status : status >> 8,
+                        (unsigned long long)c->cpu.steps);
+    for (i = 0; i < 3; i++)                                        /* (aoi_proc_free keeps fds 0-2) */
+        if (c->fd[i].used && c->fd[i].host > 2) close(c->fd[i].host);
+    if (c->trace && !c->trace_shared) fclose(c->trace);
+    aoi_proc_free(c);
+    free(c);
+    ch->proc = NULL;
+    ch->status = status;
+    {
+        int orphan = __atomic_load_n(&ch->orphan, __ATOMIC_SEQ_CST);   /* (read first: see children_free) */
+        __atomic_store_n(&ch->done, 1, __ATOMIC_SEQ_CST);
+        if (orphan) free(ch);
+        else if (linux_mode && ppid) lx_post_pid(ppid, 17);       /* SIGCHLD, once wait4 can see it */
+    }
+    return NULL;
+}
+
+/* A guest process on a host thread of its own (a big stack: iOS gives others 512 KB). */
+static int spawn_thread(struct aoi_child *ch)
+{
+    pthread_t th;
+    pthread_attr_t at;
+    int e;
+    pthread_attr_init(&at);
+    pthread_attr_setstacksize(&at, 4u << 20);
+    pthread_attr_setdetachstate(&at, PTHREAD_CREATE_DETACHED);
+    e = pthread_create(&th, &at, child_main, ch);
+    pthread_attr_destroy(&at);
+    return e;
+}
+
+static uint64_t exec_replace(struct aoi_proc *p, struct aoi_cpu *c, struct aoi_proc *np);
+
+/* The vfork child's execve: path, argv and envp from guest memory; a "#!" script runs
+ * its interpreter. Errors return to the child (it reports them and exits); success
+ * ends the vfork. */
+static uint64_t vfork_exec(struct aoi_proc *p, struct aoi_cpu *c, uint64_t pa, uint64_t av, uint64_t ev)
+{
+    static _Thread_local char strs[256 * 1024];
+    const char *argv[AOI_ARGS + 2], *envp[AOI_ARGS + 2];
+    char g[AOI_PATH], h[AOI_PATH], head[256], interp[AOI_PATH] = "", iarg[256] = "";
+    size_t used = 0;
+    int argc = 0, envc = 0, k, fd;
+    struct stat st;
+    struct aoi_proc *np;
+    struct aoi_child *ch;
+    const char *e;
+    for (k = 0; k < 2; k++) {                                      /* argv, then envp */
+        uint64_t a = k ? ev : av, sp;
+        const char **out = k ? envp : argv;
+        int *n = k ? &envc : &argc;
+        while (a && get(p, a + 8 * (uint64_t)*n, &sp, 8) && sp) {
+            if (*n >= AOI_ARGS - 2 || used >= sizeof strs - 4096) return err(L_E2BIG);
+            size_t l = 0;
+            while (used + l < sizeof strs - 1 && get(p, sp + l, strs + used + l, 1) && strs[used + l]) l++;
+            strs[used + l] = 0;
+            out[(*n)++] = strs + used;
+            used += l + 1;
+        }
+        out[*n] = NULL;
+    }
+    {
+        size_t l = 0;
+        while (l < sizeof g - 1 && get(p, pa + l, g + l, 1) && g[l]) l++;
+        g[l] = 0;
+    }
+    if (!g[0]) return err(L_ENOENT);
+    if (resolve(p, p->cwd, g, 1, h)) return err(L_ENOENT);
+    snprintf(g, sizeof g, "%s", h);
+    to_host(p, g, h);
+    if (!h[0] || stat(h, &st) || !S_ISREG(st.st_mode)) return err(L_ENOENT);
+    if ((fd = open(h, O_RDONLY | O_CLOEXEC)) < 0) return herr();
+    k = (int)read(fd, head, sizeof head - 1);
+    close(fd);
+    head[k > 0 ? k : 0] = 0;
+    if (k > 2 && head[0] == '#' && head[1] == '!') {               /* a script: its interpreter, an argument */
+        char *s = head + 2, *t;
+        while (*s == ' ' || *s == '\t') s++;
+        for (t = s; *t && *t != ' ' && *t != '\t' && *t != '\n'; t++) {}
+        snprintf(interp, sizeof interp, "%.*s", (int)(t - s), s);
+        while (*t == ' ' || *t == '\t') t++;
+        s = t;
+        for (; *t && *t != '\n'; t++) {}
+        while (t > s && (t[-1] == ' ' || t[-1] == '\t' || t[-1] == '\r')) t--;
+        snprintf(iarg, sizeof iarg, "%.*s", (int)(t - s), s);
+        if (argc > AOI_ARGS - 4) return err(L_E2BIG);
+        memmove(argv + (iarg[0] ? 2 : 1), argv, sizeof *argv * (size_t)(argc + 1));
+        argv[0] = interp;
+        if (iarg[0]) argv[1] = iarg;
+        argv[iarg[0] ? 2 : 1] = g;
+        argc += iarg[0] ? 2 : 1;
+    } else if (k < 4 || memcmp(head, "\177ELF", 4)) return err(L_ENOEXEC);
+    if (!(np = calloc(1, sizeof *np))) return err(L_ENOMEM);
+    if ((e = aoi_proc_exec(np, p->root, interp[0] ? interp : g, argc, argv, envp))) {
+        if (p->log) fprintf(p->log, "I/aoi: exec %s: %s\n", g, e);
+        if (p->trace) fprintf(p->trace, "[proc] %d exec %s failed: %s\n", PID(p), g, e);
+        aoi_proc_free(np); free(np);
+        return err(L_ENOEXEC);
+    }
+    if (!p->vf || p->cur != p->vf->thread) return exec_replace(p, c, np);   /* Linux mode: execve in place */
+    snprintf(np->data, sizeof np->data, "%s", p->data);
+    snprintf(np->cwd, sizeof np->cwd, "%s", p->cwd);
+    np->uid = p->uid;
+    np->log = p->log;
+    np->own_stdio = 1;
+    if (getenv("AOI_CHILD_TRACE") && (np->trace = fopen(getenv("AOI_CHILD_TRACE"), "a")))   /* (host debugging) */
+        setvbuf(np->trace, NULL, _IOLBF, 0);
+    if (p->linux_mode) {                                           /* a process of the Linux userland */
+        np->linux_mode = 1;
+        np->pid = p->vf->pid; np->ppid = PID(p); np->pgid = p->vf->pgid; np->sid = p->sid;
+        np->th[0].tid = np->pid;
+        np->th[0].sigmask = p->th[p->vf->thread].sigmask;
+        memcpy(np->cred, p->cred, sizeof np->cred);
+        for (k = 1; k <= 64; k++) if (p->sigact[k][0] == 1) np->sigact[k][0] = 1;   /* SIG_IGN survives execve */
+        if (!np->trace && p->trace) { np->trace = p->trace; np->trace_shared = 1; }
+    }
+    for (k = 0; k < AOI_PROC_FDS; k++) {                           /* what it inherits */
+        struct aoi_proc_fd *f = &p->fd[k], *t = &np->fd[k];
+        int d;
+        if (k < 3) t->used = 0;
+        if (!f->used || f->cloexec || f->kind == AOI_FD_EPOLL || f->kind == AOI_FD_BINDER) continue;
+        if ((d = dup(f->host)) < 0) continue;
+        *t = *f;
+        t->host = d; t->dir = NULL; t->req = NULL; t->nreq = 0; t->ep = NULL; t->pair = 0;
+        if (t->kind == AOI_FD_DNS) { t->kind = AOI_FD_FILE; t->peer = -1; }
+        if (t->kind == AOI_FD_EVENTFD) { t->count = *ev_count(p, f); t->sem = ev_sem(p, f); t->evid = 0; }
+    }
+    if (!(ch = child_new(p))) { aoi_proc_free(np); free(np); return err(L_ENOMEM); }
+    ch->pid = p->vf->pid;
+    ch->proc = np;
+    if (np->linux_mode) lx_register(np);
+    if (spawn_thread(ch)) {
+        aoi_proc_free(np); free(np);
+        for (k = 0; k < p->nchild; k++) if (p->child[k] == ch) p->child[k] = NULL;
+        free(ch);
+        return err(L_EAGAIN);
+    }
+    if (p->log) fprintf(p->log, "I/aoi: process %d: %s\n", ch->pid, g);
+    vfork_end(p, c, (uint64_t)ch->pid);
+    return (uint64_t)ch->pid;
+}
+
+/* A child that ended, for wait4/waitid: its slot, or -1 (none yet); -2: no such child. */
+static int child_find(struct aoi_proc *p, int64_t pid, int done_only)
+{
+    int i, any = 0;
+    for (i = 0; i < p->nchild; i++) {
+        struct aoi_child *ch = p->child[i];
+        if (!ch || (pid > 0 && ch->pid != pid)) continue;
+        any = 1;
+        if (!done_only || __atomic_load_n(&ch->done, __ATOMIC_SEQ_CST)) return i;
+    }
+    return any ? -1 : -2;
+}
+
+/* ---------- Linux userland mode: processes, groups, signals between them ----------
+ * Every process of the Linux root is a struct aoi_proc on a host thread of its own
+ * (the first one on the caller's). fork() copies the address space (aoi_vm_clone:
+ * copy-on-write on Darwin) and the fd table (host dups); execve() replaces the image in
+ * place. Processes are found by pid in a registry, for kill(), process groups and
+ * SIGCHLD; a signal from another process is a bit in the target's xsig, taken between
+ * time slices (lx_take) and delivered like one of its own. */
+
+static int lx_pid_next = 20000;
+static int lx_newpid(void) { return __atomic_fetch_add(&lx_pid_next, 1, __ATOMIC_SEQ_CST); }
+
+#define LX_PROCS 1024
+static struct aoi_proc *lx_procs[LX_PROCS];
+static pthread_mutex_t lx_mu = PTHREAD_MUTEX_INITIALIZER;
+volatile int aoi_tty_pgrp;
+
+static void lx_register(struct aoi_proc *p)
+{
+    int i;
+    pthread_mutex_lock(&lx_mu);
+    for (i = 0; i < LX_PROCS; i++) if (!lx_procs[i]) { lx_procs[i] = p; break; }
+    pthread_mutex_unlock(&lx_mu);
+}
+
+static void lx_unregister(struct aoi_proc *p)
+{
+    int i;
+    pthread_mutex_lock(&lx_mu);
+    for (i = 0; i < LX_PROCS; i++) if (lx_procs[i] == p) lx_procs[i] = NULL;
+    pthread_mutex_unlock(&lx_mu);
+}
+
+static void lx_post(struct aoi_proc *q, int sig)
+{
+    if (sig > 0 && sig <= 64) __atomic_or_fetch(&q->xsig, SIGBIT(sig), __ATOMIC_SEQ_CST);
+}
+
+static void lx_post_pid(int pid, int sig)
+{
+    int i;
+    pthread_mutex_lock(&lx_mu);
+    for (i = 0; i < LX_PROCS; i++) if (lx_procs[i] && lx_procs[i]->pid == pid) lx_post(lx_procs[i], sig);
+    pthread_mutex_unlock(&lx_mu);
+}
+
+int aoi_proc_kill_group(int pgid, int sig)
+{
+    int i, n = 0;
+    pthread_mutex_lock(&lx_mu);
+    for (i = 0; i < LX_PROCS; i++)
+        if (lx_procs[i] && lx_procs[i]->pgid == pgid) { lx_post(lx_procs[i], sig); n++; }
+    pthread_mutex_unlock(&lx_mu);
+    return n;
+}
+
+/* Sig to thread index i, as kill() does it: a thread in sigwait for it takes it there. */
+static int thread_signal(struct aoi_proc *p, int i, int sig)
+{
+    struct aoi_thread *t = &p->th[i];
+    if (t->state == AOI_T_SLEEP && (t->sigwait_mask & SIGBIT(sig))) {
+        uint8_t info[128];
+        memset(info, 0, sizeof info);
+        info[0] = (uint8_t)sig;
+        if (t->sigwait_info) put(p, t->sigwait_info, info, sizeof info);
+        t->sigwait_mask = 0;
+        t->state = AOI_T_RUN;
+        if (i == p->cur) p->cpu.x[0] = (uint64_t)sig; else t->cpu.x[0] = (uint64_t)sig;
+        return 1;
+    }
+    return sig_send(p, i, sig);
+}
+
+/* Signals other processes sent: each to a thread that does not block it. 0 if one ends
+ * the process (cpu.stop, exit_code and term_sig set). */
+static int lx_take(struct aoi_proc *p)
+{
+    uint64_t x = __atomic_exchange_n(&p->xsig, 0, __ATOMIC_SEQ_CST);
+    while (x) {
+        int sig = __builtin_ctzll(x) + 1, i, k;
+        x &= x - 1;
+        if (sig == 9) {                                            /* SIGKILL */
+            p->term_sig = 9; p->cpu.exit_code = 128 + 9; p->cpu.stop = AOI_STOP_EXIT;
+            return 0;
+        }
+        if (p->sigact[sig][0] == 0 && sig >= 19 && sig <= 22) continue;   /* stop signals: no job control yet */
+        i = p->cur;
+        if (p->th[i].state == AOI_T_FREE || (p->th[i].sigmask & SIGBIT(sig)))
+            for (k = 0; k < AOI_PROC_THREADS; k++)
+                if (p->th[k].state != AOI_T_FREE && !(p->th[k].sigmask & SIGBIT(sig))) { i = k; break; }
+        if (p->trace) fprintf(p->trace, "[sig] %d from another process to %d\n", sig, p->th[i].tid);
+        if (!thread_signal(p, i, sig)) return 0;
+    }
+    return 1;
+}
+
+static uint64_t lx_kill(struct aoi_proc *p, struct aoi_cpu *c, int64_t pid, int sig)
+{
+    int i, n = 0, self = 0;
+    if (pid == INT32_MIN) return err(L_ESRCH);
+    pthread_mutex_lock(&lx_mu);
+    for (i = 0; i < LX_PROCS; i++) {
+        struct aoi_proc *q = lx_procs[i];
+        int match;
+        if (!q) continue;
+        match = pid > 0 ? q->pid == pid : pid == 0 ? q->pgid == p->pgid : pid == -1 ? q->pid != 1 : q->pgid == -pid;
+        if (!match) continue;
+        n++;
+        if (q == p) self = 1;
+        if (sig) lx_post(q, sig);
+    }
+    pthread_mutex_unlock(&lx_mu);
+    if (!n) return err(L_ESRCH);
+    if (self && sig) c->stop = AOI_STOP_YIELD;                     /* to itself: delivered on return */
+    return 0;
+}
+
+static struct aoi_proc *lx_find(int pid)                           /* (call with lx_mu held) */
+{
+    int i;
+    for (i = 0; i < LX_PROCS; i++) if (lx_procs[i] && lx_procs[i]->pid == pid) return lx_procs[i];
+    return NULL;
+}
+
+static uint64_t lx_getpgid(struct aoi_proc *p, int pid, int sid)
+{
+    struct aoi_proc *q;
+    int v;
+    if (!pid || pid == p->pid) return (uint64_t)(sid ? p->sid : p->pgid);
+    pthread_mutex_lock(&lx_mu);
+    q = lx_find(pid);
+    v = q ? (sid ? q->sid : q->pgid) : -1;
+    pthread_mutex_unlock(&lx_mu);
+    return v < 0 ? err(L_ESRCH) : (uint64_t)v;
+}
+
+static uint64_t lx_setpgid(struct aoi_proc *p, int pid, int pgid)
+{
+    struct aoi_proc *q;
+    if (pgid < 0) return err(L_EINVAL);
+    if (p->vf && p->cur == p->vf->thread && (!pid || pid == p->vf->pid)) {   /* a vfork child (posix_spawn) */
+        p->vf->pgid = pgid ? pgid : p->vf->pid;
+        return 0;
+    }
+    if (!pid || pid == p->pid) { p->pgid = pgid ? pgid : p->pid; return 0; }
+    pthread_mutex_lock(&lx_mu);
+    q = lx_find(pid);
+    if (q && q->ppid == p->pid) q->pgid = pgid ? pgid : pid;
+    pthread_mutex_unlock(&lx_mu);
+    return q ? 0 : err(L_ESRCH);
+}
+
+void aoi_proc_linux(struct aoi_proc *p, const char *cwd)
+{
+    char g[AOI_PATH], h[AOI_PATH];
+    struct stat st;
+    p->linux_mode = 1;
+    p->uid = 0;
+    p->pid = p->pgid = p->sid = GUEST_PID;
+    p->ppid = 1;
+    p->th[0].tid = GUEST_PID;
+    if (cwd && !resolve(p, "/", cwd, 1, g)) {
+        host_path(p, g, h);
+        if (h[0] && !stat(h, &st) && S_ISDIR(st.st_mode)) snprintf(p->cwd, sizeof p->cwd, "%s", g);
+    }
+    lx_register(p);
+    if (!aoi_tty_pgrp) aoi_tty_pgrp = p->pgid;
+}
+
+void aoi_proc_linux_resume(struct aoi_proc *p)
+{
+    if (!p->linux_mode) return;
+    p->xsig = 0;
+    p->trace_shared = 0;
+    lx_register(p);
+    aoi_tty_pgrp = p->pgid;
+}
+
+/* An epoll set for the child of a fork: its own copy. */
+static struct aoi_epoll *epoll_copy(const struct aoi_epoll *ep)
+{
+    struct aoi_epoll *n = calloc(1, sizeof *n);
+    if (!n) return NULL;
+    n->refs = 1; n->n = ep->n; n->cap = ep->n;
+    if (ep->n && !(n->e = malloc(sizeof *n->e * (size_t)ep->n))) { free(n); return NULL; }
+    if (ep->n) memcpy(n->e, ep->e, sizeof *n->e * (size_t)ep->n);
+    return n;
+}
+
+/* fork(): the child is a copy of this process with only the calling thread, on a host
+ * thread of its own. Returns its pid to the parent; the child returns 0. */
+static uint64_t lx_fork(struct aoi_proc *p, struct aoi_cpu *c, uint64_t flags, uint64_t tls, uint64_t ctid)
+{
+    struct aoi_proc *np;
+    struct aoi_child *ch;
+    struct aoi_thread *t;
+    struct { struct aoi_epoll *from, *to; } eps[16];
+    int neps = 0, i, pid;
+    const char *e;
+    if (p->vf) return err(L_EAGAIN);
+    if (!(np = malloc(sizeof *np))) return err(L_ENOMEM);
+    memcpy(np, p, sizeof *np);
+    if ((e = aoi_vm_clone(&np->vm, &p->vm))) {
+        if (p->log) fprintf(p->log, "I/aoi: fork: %s\n", e);
+        free(np);
+        return err(L_ENOMEM);
+    }
+    pid = lx_newpid();
+    np->mem.vm = &np->vm;
+    np->cpu = *c;
+    np->cpu.mem = &np->mem;
+    np->cpu.host_ctx = np;
+    np->cpu.x[0] = 0;
+    np->cpu.pc = c->pc + 4;                                        /* the child returns from this svc */
+    np->cpu.stop = AOI_RUN;
+    np->cpu.excl_valid = 0;
+    if (flags & 0x80000) np->cpu.tpidr = tls;                      /* CLONE_SETTLS */
+    memset(np->th, 0, sizeof np->th);
+    t = &np->th[0];
+    t->state = AOI_T_RUN;
+    t->tid = pid;
+    t->sigmask = p->th[p->cur].sigmask;
+    memcpy(t->altstack, p->th[p->cur].altstack, sizeof t->altstack);
+    memcpy(t->comm, p->th[p->cur].comm, sizeof t->comm);
+    if (flags & 0x200000) t->clear_tid = ctid;                     /* CLONE_CHILD_CLEARTID */
+    t->cpu = np->cpu;
+    np->cur = 0;
+    np->pid = pid; np->ppid = PID(p); np->pgid = p->pgid; np->sid = p->sid;
+    np->xsig = 0; np->term_sig = 0;
+    np->child = NULL; np->nchild = 0; np->vf = NULL;
+    np->binder = NULL; np->sf = NULL; np->af = NULL; np->gralloc = NULL; np->audio = NULL;
+    np->frame = NULL; np->home = NULL; np->clip = NULL; np->ime = NULL; np->warm = NULL;
+    np->gpu = NULL; np->gpu_live = 0; np->snap_gpu_free = 0; np->input_w = 0;
+    np->nshm = 0;                                                  /* (MAP_SHARED pages: the child's are its own) */
+    np->samples = NULL; np->nsamples = np->maxsamples = 0;
+    np->stop_request = np->pause_request = np->snap_request = np->redraw_request = 0;
+    np->snap_path[0] = 0;
+    np->thread_exit = 0;
+    np->own_stdio = 1;
+    np->trace_shared = p->trace != NULL;
+    for (i = 0; i < AOI_PROC_FDS; i++) {
+        struct aoi_proc_fd *f = &np->fd[i];
+        if (!f->used) continue;
+        f->dir = NULL; f->req = NULL; f->nreq = 0;
+        if (f->kind == AOI_FD_BINDER || f->kind == AOI_FD_UFFD) { f->used = 0; continue; }
+        if (f->kind == AOI_FD_DNS) { f->kind = AOI_FD_FILE; f->peer = -1; }
+        if ((f->host = dup(p->fd[i].host)) < 0) { f->used = 0; continue; }
+        if (f->kind == AOI_FD_EPOLL && f->ep) {                    /* dups share one copy, as they share the set */
+            int k;
+            for (k = 0; k < neps && eps[k].from != p->fd[i].ep; k++) {}
+            if (k < neps) { f->ep = eps[k].to; f->ep->refs++; }
+            else {
+                f->ep = epoll_copy(p->fd[i].ep);
+                if (!f->ep) { close(f->host); f->used = 0; continue; }
+                if (neps < 16) { eps[neps].from = p->fd[i].ep; eps[neps++].to = f->ep; }
+            }
+        }
+    }
+    if (flags & 0x1000000) {                                       /* CLONE_CHILD_SETTID: in the child's memory */
+        uint32_t v = (uint32_t)pid;
+        aoi_vm_write(&np->vm, ctid & 0x00ffffffffffffffULL, &v, 4, AOI_PROT_W);
+    }
+    if (!(ch = child_new(p))) goto fail;
+    ch->pid = pid;
+    ch->proc = np;
+    lx_register(np);
+    if (p->trace) fprintf(p->trace, "[proc] fork: child %d (%llu MiB of chunks)\n", pid,
+                          (unsigned long long)(np->vm.nchunks * (AOI_VM_CHUNK >> 20)));
+    if (spawn_thread(ch)) {
+        for (i = 0; i < p->nchild; i++) if (p->child[i] == ch) p->child[i] = NULL;
+        free(ch);
+        lx_unregister(np);
+        goto fail;
+    }
+    return (uint64_t)pid;
+fail:
+    for (i = 3; i < AOI_PROC_FDS; i++) if (np->fd[i].used) close(np->fd[i].host);
+    for (i = 0; i < 3; i++) if (np->fd[i].used && np->fd[i].host > 2) close(np->fd[i].host);
+    aoi_vm_free(&np->vm);
+    free(np);
+    return err(L_EAGAIN);
+}
+
+/* execve() in place: the new image np (made by aoi_proc_exec) replaces this process's
+ * memory and threads; pid, fds without FD_CLOEXEC, cwd, ignored signals and the mask stay. */
+static uint64_t exec_replace(struct aoi_proc *p, struct aoi_cpu *c, struct aoi_proc *np)
+{
+    struct aoi_cpu old = *c;
+    struct aoi_thread *t;
+    int i;
+    for (i = 0; i < AOI_PROC_FDS; i++) {
+        struct aoi_proc_fd *f = &p->fd[i];
+        if (!f->used || !f->cloexec) continue;
+        if (f->dir) closedir(f->dir); else close(f->host);
+        if (f->kind == AOI_FD_EPOLL) epoll_unref(f->ep);
+        if (f->kind == AOI_FD_EVENTFD) ev_ref(p, f, -1);
+        free(f->req);
+        f->used = 0; f->dir = NULL; f->req = NULL;
+    }
+    shm_sync(p, 0, ~0ULL >> 1, 1);                                 /* shared file mappings reach their files */
+    aoi_vm_free(&p->vm);
+    p->vm = np->vm;
+    memset(&np->vm, 0, sizeof np->vm);
+    p->mem = np->mem;
+    p->mem.vm = &p->vm;
+    *c = np->cpu;
+    c->mem = &p->mem;
+    c->host_ctx = p;
+    c->syscall = aoi_proc_syscall;
+    c->steps = old.steps;
+    c->trace = old.trace;
+    c->stop = AOI_STOP_NEWPC;
+    t = &p->th[p->cur];
+    for (i = 0; i < AOI_PROC_THREADS; i++)                         /* the other threads are gone */
+        if (i != p->cur) p->th[i].state = AOI_T_FREE;
+    t->tid = PID(p);
+    t->clear_tid = 0;
+    memset(t->altstack, 0, sizeof t->altstack);
+    memset(t->comm, 0, sizeof t->comm);
+    t->susp = 0;
+    for (i = 1; i <= 64; i++)                                      /* handlers reset; SIG_IGN stays */
+        if (p->sigact[i][0] != 1) memset(p->sigact[i], 0, sizeof p->sigact[i]);
+    p->brk = np->brk;
+    p->stack_start = np->stack_start;
+    memcpy(p->exe, np->exe, sizeof p->exe);
+    memcpy(p->cmdline, np->cmdline, sizeof p->cmdline);
+    p->cmdline_len = np->cmdline_len;
+    memcpy(p->maps, np->maps, sizeof p->maps);
+    p->nmaps = np->nmaps;
+    p->nuffd_reg = 0;
+    p->thread_exit = 0;
+    if (p->trace) fprintf(p->trace, "[proc] %d execve %s\n", PID(p), p->exe);
+    free(np);
+    return 0;
+}
+
+static void children_free(struct aoi_proc *p)
+{
+    int i;
+    for (i = 0; i < p->nchild; i++) {
+        struct aoi_child *ch = p->child[i];
+        if (!ch) continue;
+        if (__atomic_load_n(&ch->done, __ATOMIC_SEQ_CST)) free(ch);
+        else {
+            if (ch->proc && !p->linux_mode) ch->proc->stop_request = 1;   /* (Linux: orphans live on) */
+            __atomic_store_n(&ch->orphan, 1, __ATOMIC_SEQ_CST);
+        }
+    }
+    free(p->child);
+    p->child = NULL; p->nchild = 0;
+}
+
+uint64_t aoi_proc_syscall(struct aoi_cpu *c)
+{
+    struct aoi_proc *p = c->host_ctx;
+    uint64_t nr = c->x[8], a0 = c->x[0], a1 = c->x[1], a2 = c->x[2], a3 = c->x[3], a4 = c->x[4],
+             a5 = c->x[5], r;
+    char g[AOI_PATH], h[AOI_PATH];
+    struct aoi_proc_fd *f;
+    struct stat st;
+    uint8_t sbuf[128];
+    int rc;
+
+    switch (nr) {
+    case NR_read: case NR_pread64: {
+        if (!(f = fd_get(p, a0))) { r = err(L_EBADF); break; }
+        if (f->kind == AOI_FD_TTY) { r = tty_read(p, f, a1, a2); break; }
+        if (f->kind == AOI_FD_TIMERFD) {                           /* expirations since the last read */
+            uint64_t v;
+            if (a2 < 8) { r = err(L_EINVAL); break; }
+            timer_settle(f);
+            if (!f->count) {
+                int64_t left = f->tnext ? f->tnext - now_ns() : 1000000000;
+                r = f->nonblock ? err(L_EAGAIN) : block_and_retry(p, left < 1000000 ? 1000000 : left > 1000000000 ? 1000000000 : left);
+                break;
+            }
+            v = f->count;
+            f->count = 0;
+            r = put(p, a1, &v, 8) ? 8 : err(L_EFAULT);
+            break;
+        }
+        if (f->kind == AOI_FD_EVENTFD) {                           /* the counter (or 1), then less */
+            uint64_t v;
+            if (a2 < 8) { r = err(L_EINVAL); break; }
+            uint64_t *c = ev_count(p, f);
+            if (!*c) { r = f->nonblock ? err(L_EAGAIN) : block_and_retry(p, 1000000); break; }
+            v = ev_sem(p, f) ? 1 : *c;
+            *c -= v;
+            r = put(p, a1, &v, 8) ? 8 : err(L_EFAULT);
+            break;
+        }
+        r = a2 ? (uint64_t)xfer(p, f->host, a1, a2, 1, nr == NR_read ? -1 : (int64_t)a3) : 0;
+        if (r == err(L_EAGAIN) && (f->kind == AOI_FD_PIPE || f->kind == AOI_FD_INET || f->kind == AOI_FD_DNS)
+            && !f->nonblock) r = block_and_retry(p, 1000000);
+        break;
+    }
+    case NR_write: case NR_pwrite64: {
+        if (!(f = fd_get(p, a0))) { r = err(L_EBADF); break; }
+        if (f->kind == AOI_FD_EVENTFD) {                           /* add to the counter */
+            uint64_t v;
+            if (a2 < 8 || !get(p, a1, &v, 8)) { r = err(a2 < 8 ? L_EINVAL : L_EFAULT); break; }
+            if (v == ~0ULL) { r = err(L_EINVAL); break; }
+            uint64_t *c = ev_count(p, f);
+            if (*c + v < *c || *c + v == ~0ULL) {
+                r = f->nonblock ? err(L_EAGAIN) : block_and_retry(p, 1000000);
+                break;
+            }
+            *c += v;
+            r = 8;
+            break;
+        }
+        if (f->kind == AOI_FD_LOGD) {
+            uint8_t pkt[4096];
+            uint64_t n = a2 < sizeof pkt ? a2 : sizeof pkt;
+            r = get(p, a1, pkt, n) ? logd_write(p, pkt, n), a2 : err(L_EFAULT);
+            break;
+        }
+        if (f->kind == AOI_FD_DNS) { r = dns_write(p, f, a1, a2); break; }
+        if (f->kind == AOI_FD_TTY) { r = tty_write(p, a1, a2); break; }
+        if (f->host <= 2) fflush(stdout);
+        r = a2 ? (uint64_t)xfer(p, f->host, a1, a2, 0, nr == NR_write ? -1 : (int64_t)a3) : 0;
+        if (r == err(L_EAGAIN) && (f->kind == AOI_FD_PIPE || f->kind == AOI_FD_INET) && !f->nonblock)
+            r = block_and_retry(p, 1000000);
+        break;
+    }
+    case NR_readv: case NR_writev: {
+        uint64_t i, total = 0;
+        if (!(f = fd_get(p, a0))) { r = err(L_EBADF); break; }
+        if (f->kind == AOI_FD_LOGD && nr == NR_writev) {          /* gather one log packet */
+            uint8_t pkt[4096];
+            uint64_t n = 0;
+            for (i = 0; i < a2 && i < 16; i++) {
+                uint8_t e[16];
+                uint64_t len;
+                if (!get(p, a1 + i * 16, e, 16)) break;
+                len = u64(e + 8);
+                if (n + len > sizeof pkt) len = sizeof pkt - n;
+                if (len && !get(p, u64(e), pkt + n, len)) break;
+                n += len; total += u64(e + 8);
+            }
+            logd_write(p, pkt, n);
+            r = total;
+            break;
+        }
+        if (f->kind == AOI_FD_TTY) {                               /* the terminal: one buffer at a time */
+            r = 0;
+            for (i = 0; i < a2; i++) {
+                uint8_t e[16];
+                uint64_t k;
+                if (!get(p, a1 + i * 16, e, 16)) { r = err(L_EFAULT); break; }
+                if (!u64(e + 8)) continue;
+                k = nr == NR_readv ? tty_read(p, f, u64(e), u64(e + 8)) : tty_write(p, u64(e), u64(e + 8));
+                if (IS_ERR(k) || (p->cpu.stop == AOI_STOP_RESTART)) { if (!total) r = k; break; }
+                total += k;
+                r = total;
+                if (nr == NR_readv) break;                         /* (a line at a time) */
+            }
+            break;
+        }
+        if (f->kind != AOI_FD_FILE && f->kind != AOI_FD_PIPE && f->kind != AOI_FD_INET) { r = err(L_ENOTCONN); break; }
+        r = 0;
+        for (i = 0; i < a2; i++) {
+            uint8_t e[16];
+            uint64_t base, len;
+            int64_t k;
+            if (!get(p, a1 + i * 16, e, 16)) { r = err(L_EFAULT); break; }
+            base = u64(e); len = u64(e + 8);
+            if (!len) continue;
+            k = xfer(p, f->host, base, len, nr == NR_readv, -1);
+            if (k == -L_EAGAIN && !total && f->kind != AOI_FD_FILE && !f->nonblock) {   /* (musl reads stdio with readv) */
+                r = block_and_retry(p, 1000000);
+                break;
+            }
+            if (k < 0) { r = total ? total : (uint64_t)k; break; }
+            total += (uint64_t)k;
+            r = total;
+            if ((uint64_t)k < len) break;
+        }
+        break;
+    }
+    case NR_openat: {
+        int hfd, fdn;
+        if ((rc = at_path(p, sx32(a0), a1, !(a2 & 0100000), g))) { r = err(rc); break; }
+        if (!strncmp(g, "/proc/", 6)) {                             /* synthetic procfs */
+            if ((hfd = proc_file(p, g)) < 0) { r = err(L_ENOENT); break; }
+        } else if (p->linux_mode && is_tty_path(g)) {              /* the terminal (core/tty.c) */
+            if (!aoi_console) { r = err(6); break; }
+            if ((hfd = open("/dev/null", O_RDWR | O_CLOEXEC)) < 0) { r = herr(); break; }
+            if ((fdn = fd_new(p, hfd, "/dev/pts/0", 0)) < 0) { close(hfd); r = err(L_EMFILE); break; }
+            p->fd[fdn].kind = AOI_FD_TTY;
+            p->fd[fdn].nonblock = (a2 & 04000) != 0;
+            p->fd[fdn].cloexec = (a2 & 02000000) != 0;
+            r = (uint64_t)fdn;
+            break;
+        } else if (!strcmp(g, "/dev/aoi_home")) {                  /* aoi: the app left for the launcher */
+            if (p->home) p->home(p->frame_ctx);
+            r = err(L_ENOENT);
+            break;
+        } else if (!strncmp(g, "/dev/aoi_clip/", 14)) {           /* aoi.Clipboard: the host's clipboard */
+            if (p->clip && g[14]) { to_host(p, "/data/local/tmp/aoi.clip", h); p->clip(p->frame_ctx, g[14], h); }
+            r = err(L_ENOENT);
+            break;
+        } else if (!strncmp(g, "/dev/aoi_layer/", 15)) {         /* aoi.WindowSession: where a window goes */
+            aoi_sf_place(p, g + 15);
+            r = err(L_ENOENT);
+            break;
+        } else if (!strncmp(g, "/dev/aoi_ime/", 13)) {            /* aoi.InputMethodManager: the host's keyboard */
+            if (p->ime) p->ime(p->frame_ctx, g[13] == '1');
+            r = err(L_ENOENT);
+            break;
+        } else if (!strcmp(g, "/dev/aoi_snapshot_wanted")) {       /* aoi.Snapshot: EBUSY if the host takes one */
+            r = err(p->snap_path[0] ? L_EBUSY : L_ENOENT);
+            break;
+        } else if (!strcmp(g, "/dev/aoi_threads")) {               /* aoi.Snapshot, when stuck: where each thread is */
+            aoi_proc_log_threads(p);
+            r = err(L_ENOENT);
+            break;
+        } else if (!strcmp(g, "/dev/aoi_gpu_live")) {              /* aoi.Snapshot: EBUSY while it has GL state */
+            r = err(p->gpu_live ? L_EBUSY : L_ENOENT);
+            break;
+        } else if (!strcmp(g, "/dev/aoi_snapshot_gpu_free")) {     /* aoi.Snapshot: save when the GPU lets go; */
+            if (p->snap_path[0] && p->gpu_live) p->snap_gpu_free = 1;   /* a window drawing again a moment */
+            else if (p->snap_path[0]) p->snap_request = 1;              /* later cannot slip in between */
+            r = err(L_ENOENT);
+            break;
+        } else if (!strcmp(g, "/dev/aoi_snapshot_pending")) {      /* aoi.Snapshot: EBUSY until it is taken */
+            r = err(p->snap_gpu_free || p->snap_request ? L_EBUSY : L_ENOENT);
+            break;
+        } else if (!strcmp(g, "/dev/aoi_snapshot_skip")) {         /* aoi.Snapshot: this app is not saved */
+            p->snap_gpu_free = 0; p->snap_request = 0; p->snap_path[0] = 0;
+            r = err(L_ENOENT);
+            break;
+        } else if (!strcmp(g, "/dev/aoi_snapshot_cancel")) {       /* aoi.Snapshot: gave up waiting */
+            p->snap_gpu_free = 0;
+            r = err(L_ENOENT);
+            break;
+        } else if (!strcmp(g, "/dev/aoi_warm")) {                  /* aoi.Main, started before its app: wait for it */
+            if (p->warm && !p->warm(p)) { r = block_and_retry(p, 20000000); break; }
+            r = err(L_ENOENT);
+            break;
+        } else if (!strcmp(g, "/dev/aoi_snapshot")) {              /* aoi.Main: the app is up, save it */
+            if (p->snap_path[0]) p->snap_request = 1;
+            r = err(L_ENOENT);
+            break;
+        } else if (!strcmp(g, "/dev/aoi_input")) {                 /* touches from the host (aoi_proc_touch) */
+            int pv[2];
+            if (p->input_w > 0 || pipe(pv)) { r = err(L_EBUSY); break; }
+            fcntl(pv[0], F_SETFL, O_NONBLOCK); fcntl(pv[0], F_SETFD, FD_CLOEXEC); fcntl(pv[1], F_SETFD, FD_CLOEXEC);
+            if ((fdn = fd_new(p, pv[0], g, 0)) < 0) { close(pv[0]); close(pv[1]); r = err(L_EMFILE); break; }
+            p->fd[fdn].kind = AOI_FD_PIPE;
+            p->input_w = pv[1];
+            p->input_pair = aoi_proc_pair(p, fdn, -1, 0);
+            r = (uint64_t)fdn;
+            break;
+        } else if (!strncmp(g, "/dev/dma_heap/", 14)) {           /* DMA-BUF heaps (the codecs' buffers) */
+            if ((hfd = open("/dev/null", O_RDWR | O_CLOEXEC)) < 0) { r = herr(); break; }
+            if ((fdn = fd_new(p, hfd, g, 0)) < 0) { close(hfd); r = err(L_EMFILE); break; }
+            p->fd[fdn].kind = AOI_FD_DMAHEAP;
+            r = (uint64_t)fdn;
+            break;
+        } else if (!strcmp(g, "/dev/binder") || !strcmp(g, "/dev/hwbinder") || !strcmp(g, "/dev/vndbinder")) {
+            if ((hfd = open("/dev/null", O_RDWR | O_CLOEXEC)) < 0) { r = herr(); break; }
+            if ((fdn = fd_new(p, hfd, g, 0)) < 0) { close(hfd); r = err(L_EMFILE); break; }
+            p->fd[fdn].kind = AOI_FD_BINDER;                        /* core/binder.c */
+            r = (uint64_t)fdn;
+            if (p->trace) fprintf(p->trace, "[sys] open %s -> %d (binder)\n", g, fdn);
+            break;
+        } else {
+            struct stat fs;
+            to_host(p, g, h);
+            if (!stat(h, &fs) && S_ISFIFO(fs.st_mode)) {           /* a FIFO (mknod): a pipe, never blocking the host */
+                if ((hfd = open(h, host_oflags(a2) | O_NONBLOCK | O_CLOEXEC)) < 0) { r = herr(); break; }
+                if ((fdn = fd_new(p, hfd, g, 0)) < 0) { close(hfd); r = err(L_EMFILE); break; }
+                p->fd[fdn].kind = AOI_FD_PIPE;
+                p->fd[fdn].nonblock = (a2 & 04000) != 0;
+                r = (uint64_t)fdn;
+                break;
+            }
+            hfd = open(h, host_oflags(a2) | O_CLOEXEC, (mode_t)(p->linux_mode ? (a3 & 07777) | 0600 : a3));
+            if (hfd < 0 && errno == EACCES && p->linux_mode && !p->cred[1] && !stat(h, &fs)) {
+                /* root reads and writes any file: the host file gets the owner's bits it lacks
+                 * (dpkg creates files with mode 0 and sets the mode last), as fakeroot does */
+                chmod(h, (fs.st_mode & 07777) | (S_ISDIR(fs.st_mode) ? 0700 : 0600));
+                hfd = open(h, host_oflags(a2) | O_CLOEXEC, (mode_t)((a3 & 07777) | 0600));
+            }
+        }
+        if (hfd < 0) { r = herr(); break; }
+        if ((fdn = fd_new(p, hfd, g, 0)) < 0) { close(hfd); r = err(L_EMFILE); break; }
+        r = (uint64_t)fdn;
+        if (p->trace) fprintf(p->trace, "[sys] open %s -> %d\n", g, fdn);
+        break;
+    }
+    case 436: {                                                    /* close_range(first, last, flags) */
+        uint64_t fd, last = a1 < AOI_PROC_FDS - 1 ? a1 : AOI_PROC_FDS - 1;
+        if (a0 > a1) { r = err(L_EINVAL); break; }
+        for (fd = a0; fd <= last; fd++) {
+            if (!(f = fd_get(p, fd))) continue;
+            if (a2 & 4) { f->cloexec = 1; continue; }              /* CLOSE_RANGE_CLOEXEC */
+            if (fd > 2 || p->own_stdio || p->vf) { if (f->dir) closedir(f->dir); else close(f->host); }
+            if (f->kind == AOI_FD_EPOLL) epoll_unref(f->ep);
+            if (f->kind == AOI_FD_EVENTFD) ev_ref(p, f, -1);
+            if (f->kind == AOI_FD_DNS && f->peer >= 0) close(f->peer);
+            free(f->req);
+            f->used = 0; f->dir = NULL; f->ep = NULL; f->req = NULL; f->nreq = 0; f->connecting = 0;
+            if (!p->vf) epoll_forget(p, (int)fd);
+        }
+        r = 0;
+        break;
+    }
+    case NR_close:
+        if (!(f = fd_get(p, a0))) { r = err(L_EBADF); break; }
+        if (a0 > 2 || p->own_stdio || p->vf) { if (f->dir) closedir(f->dir); else close(f->host); }
+        if (f->kind == AOI_FD_EPOLL) epoll_unref(f->ep);
+        if (f->kind == AOI_FD_EVENTFD) ev_ref(p, f, -1);
+        if (f->kind == AOI_FD_DNS && f->peer >= 0) close(f->peer);
+        free(f->req);
+        f->used = 0; f->dir = NULL; f->ep = NULL; f->req = NULL; f->nreq = 0; f->connecting = 0;
+        if (!p->vf) epoll_forget(p, (int)a0);                      /* (a vfork child's copies: the parent's stay) */
+        r = 0;
+        break;
+    case NR_lseek: {
+        off_t o;
+        int wh = (int)a2;
+        if (!(f = fd_get(p, a0))) { r = err(L_EBADF); break; }
+        if (wh > 2) { r = err(L_EINVAL); break; }
+        o = lseek(f->host, (off_t)a1, wh == 0 ? SEEK_SET : wh == 1 ? SEEK_CUR : SEEK_END);
+        r = o < 0 ? herr() : (uint64_t)o;
+        break;
+    }
+    case NR_fstat:
+        if (!(f = fd_get(p, a0))) { r = err(L_EBADF); break; }
+        if (fstat(f->host, &st)) { r = herr(); break; }
+        lx_stat(&st, sbuf, owner(p, f->path));
+        if (f->kind == AOI_FD_TTY) tty_stat(sbuf);
+        r = put(p, a1, sbuf, 128) ? 0 : err(L_EFAULT);
+        break;
+    case 291: {                                                    /* statx(dirfd, path, flags, mask, buf) */
+        int empty = (a2 & 0x1000) != 0, tty = 0;
+        char path0[2];
+        uint8_t sx[256];
+        if (empty && gstr(p, a1, path0, 2) && !path0[0]) {
+            if (!(f = fd_get(p, a0))) { r = err(L_EBADF); break; }
+            if (fstat(f->host, &st)) { r = herr(); break; }
+            snprintf(g, AOI_PATH, "%s", f->path);
+            tty = f->kind == AOI_FD_TTY;
+        } else {
+            if ((rc = at_path(p, sx32(a0), a1, !(a2 & 0x100), g))) { r = err(rc); break; }
+            if (!(a2 & 0x100) && !strcmp(g, "/proc/self/exe")) snprintf(g, AOI_PATH, "%s", p->exe);
+            if (p->linux_mode && aoi_console && is_tty_path(g)) { tty = 1; to_host(p, "/dev/null", h); }
+            else to_host(p, g, h);
+            if ((a2 & 0x100) ? lstat(h, &st) : stat(h, &st)) { r = herr(); break; }
+        }
+        lx_stat(&st, sbuf, owner(p, g));
+        if (tty) tty_stat(sbuf);
+        statx_from_stat(sbuf, sx);
+        r = put(p, a4, sx, sizeof sx) ? 0 : err(L_EFAULT);
+        break;
+    }
+    case NR_newfstatat: {
+        int empty = (a3 & 0x1000) != 0, tty = 0;                  /* AT_EMPTY_PATH */
+        char path0[2];
+        if (empty && gstr(p, a1, path0, 2) && !path0[0]) {
+            if (!(f = fd_get(p, a0))) { r = err(L_EBADF); break; }
+            if (fstat(f->host, &st)) { r = herr(); break; }
+            snprintf(g, AOI_PATH, "%s", f->path);
+            tty = f->kind == AOI_FD_TTY;
+        } else {
+            if ((rc = at_path(p, sx32(a0), a1, !(a3 & 0x100), g))) { r = err(rc); break; }
+            if (!(a3 & 0x100) && !strcmp(g, "/proc/self/exe")) snprintf(g, AOI_PATH, "%s", p->exe);   /* (linker64) */
+            if (p->linux_mode && aoi_console && is_tty_path(g)) { tty = 1; to_host(p, "/dev/null", h); }
+            else to_host(p, g, h);
+            if ((a3 & 0x100) ? lstat(h, &st) : stat(h, &st)) { r = herr(); break; }
+        }
+        lx_stat(&st, sbuf, owner(p, g));
+        if (tty) tty_stat(sbuf);
+        r = put(p, a2, sbuf, 128) ? 0 : err(L_EFAULT);
+        break;
+    }
+    case NR_faccessat: case NR_faccessat2:
+        if ((rc = at_path(p, sx32(a0), a1, 1, g))) { r = err(rc); break; }
+        if (!strcmp(g, "/dev/binder") || !strcmp(g, "/dev/hwbinder") || !strcmp(g, "/dev/vndbinder") ||
+            !strcmp(g, "/dev/dma_heap/system") || !strcmp(g, "/dev/dma_heap/system-uncached")) { r = 0; break; }
+        to_host(p, g, h);
+        r = access(h, (int)a2 & 7) ? herr() : 0;
+        if (!r && (a2 & 2) && p->uid && owner(p, g) != p->uid && !stat(h, &st) && S_ISREG(st.st_mode))
+            r = err(L_EACCES);                                     /* (W_OK) not the app's file */
+        break;
+    case NR_readlinkat: {
+        char path[AOI_PATH], target[AOI_PATH];
+        ssize_t k;
+        if (!gstr(p, a1, path, sizeof path)) { r = err(L_EFAULT); break; }
+        if (!strcmp(path, "/proc/self/exe")) {
+            k = (ssize_t)strlen(p->exe);
+            memcpy(target, p->exe, (size_t)k);
+        } else if (!strncmp(path, "/proc/self/fd/", 14)) {
+            uint64_t n = strtoull(path + 14, NULL, 10);
+            if (!(f = fd_get(p, n))) { r = err(L_ENOENT); break; }
+            k = (ssize_t)strlen(f->path);
+            memcpy(target, f->path, (size_t)k);
+        } else {
+            if ((rc = at_path(p, sx32(a0), a1, 0, g))) { r = err(rc); break; }
+            to_host(p, g, h);
+            if ((k = readlink(h, target, sizeof target)) < 0) { r = herr(); break; }
+        }
+        if ((uint64_t)k > a3) k = (ssize_t)a3;
+        r = put(p, a2, target, (uint64_t)k) ? (uint64_t)k : err(L_EFAULT);
+        break;
+    }
+    case NR_getdents64:
+        if (!(f = fd_get(p, a0))) { r = err(L_EBADF); break; }
+        r = sys_getdents64(p, f, a1, a2);
+        break;
+    case NR_getcwd: {
+        size_t n = strlen(p->cwd) + 1;
+        if (n > a1) { r = err(L_ERANGE); break; }
+        r = put(p, a0, p->cwd, n) ? (uint64_t)n : err(L_EFAULT);
+        break;
+    }
+    case NR_chdir:
+        if ((rc = at_path(p, -100, a0, 1, g))) { r = err(rc); break; }
+        to_host(p, g, h);
+        if (stat(h, &st)) { r = herr(); break; }
+        if (!S_ISDIR(st.st_mode)) { r = err(L_ENOTDIR); break; }
+        snprintf(p->cwd, sizeof p->cwd, "%s", g);
+        r = 0;
+        break;
+    case NR_fcntl:
+        if (!(f = fd_get(p, a0))) { r = err(L_EBADF); break; }
+        switch (a1) {
+        case 0: case 1030: {                                       /* F_DUPFD(_CLOEXEC) */
+            int d = dup(f->host), n;
+            if (d < 0) { r = herr(); break; }
+            if ((n = fd_new(p, d, f->path, (int)a2)) < 0) { close(d); r = err(L_EMFILE); break; }
+            p->fd[n].kind = f->kind; p->fd[n].nonblock = f->nonblock; p->fd[n].seals = f->seals;
+            p->fd[n].count = f->count; p->fd[n].tnext = f->tnext; p->fd[n].tint = f->tint; p->fd[n].tclock = f->tclock;
+            p->fd[n].evid = f->evid; if (f->kind == AOI_FD_EVENTFD) ev_ref(p, f, 1);
+            p->fd[n].pair = f->pair; p->fd[n].end = f->end; p->fd[n].ptype = f->ptype;
+            if ((p->fd[n].ep = f->ep)) f->ep->refs++;             /* (a dup'd eventfd copies its counter) */
+            r = (uint64_t)n;
+            break;
+        }
+        case 1: r = (uint64_t)f->cloexec; break;                   /* F_GETFD */
+        case 2: f->cloexec = (int)(a2 & 1); r = 0; break;          /* F_SETFD: (what a child's execve keeps) */
+        case 3: r = 2 | (f->nonblock ? 04000 : 0); break;          /* F_GETFL: O_RDWR (+ O_NONBLOCK) */
+        case 4: f->nonblock = (a2 & 04000) != 0; r = 0; break;     /* F_SETFL: O_NONBLOCK is what counts */
+        case 5: case 36: {                                         /* F_GETLK, F_OFD_GETLK: nothing in the way */
+            uint16_t unlck = 2;                                    /* (one process: POSIX locks never conflict) */
+            r = put(p, a2, &unlck, 2) ? 0 : err(L_EFAULT);
+            break;
+        }
+        case 6: case 7: case 37: case 38: r = 0; break;            /* F_SETLK(W), F_OFD_SETLK(W): granted (SQLite) */
+        case 1033: case 1034:                                      /* F_ADD_SEALS, F_GET_SEALS: memfds only */
+            if (strncmp(f->path, "memfd:", 6)) { r = err(L_EINVAL); break; }
+            if (a1 == 1034) { r = (uint64_t)f->seals; break; }
+            if (f->seals & 1) { r = err(L_EPERM); break; }
+            f->seals |= (int)a2; r = 0;
+            break;
+        default: r = err(L_EINVAL); break;
+        }
+        break;
+    case NR_dup: case NR_dup3: {
+        int d, n;
+        if (!(f = fd_get(p, a0))) { r = err(L_EBADF); break; }
+        if (nr == NR_dup3) {
+            if (a1 >= AOI_PROC_FDS) { r = err(L_EBADF); break; }
+            if (a1 == a0) { r = err(L_EINVAL); break; }
+        }
+        if ((d = dup(f->host)) < 0) { r = herr(); break; }
+        if (nr == NR_dup3) {
+            struct aoi_proc_fd *t = &p->fd[a1];
+            if (t->used && (a1 > 2 || p->own_stdio || p->vf)) { if (t->dir) closedir(t->dir); else close(t->host); }
+            /* fds 0-2: the guest's own host fd, never dup2 onto the host's 0-2 (they are
+             * the whole iOS process's, and the app's log may be one); the one they had
+             * is the embedder's and stays open */
+            if (t->used && t->kind == AOI_FD_EPOLL) epoll_unref(t->ep);
+            if (t->used && t->kind == AOI_FD_EVENTFD) ev_ref(p, t, -1);
+            t->used = 1; t->host = d; t->dir = NULL; t->kind = f->kind; t->nonblock = f->nonblock;
+            t->pair = f->pair; t->end = f->end; t->ptype = f->ptype; t->seals = f->seals;
+            t->count = f->count; t->sem = f->sem; t->evid = f->evid; t->cloexec = 0;
+            if (f->kind == AOI_FD_EVENTFD) ev_ref(p, f, 1);
+            if ((t->ep = f->ep)) f->ep->refs++;
+            join(t->path, AOI_PATH, "", f->path);
+            r = a1;
+        } else {
+            if ((n = fd_new(p, d, f->path, 0)) < 0) { close(d); r = err(L_EMFILE); break; }
+            p->fd[n].kind = f->kind; p->fd[n].nonblock = f->nonblock; p->fd[n].seals = f->seals;
+            p->fd[n].count = f->count; p->fd[n].tnext = f->tnext; p->fd[n].tint = f->tint; p->fd[n].tclock = f->tclock;
+            p->fd[n].evid = f->evid; if (f->kind == AOI_FD_EVENTFD) ev_ref(p, f, 1);
+            p->fd[n].pair = f->pair; p->fd[n].end = f->end; p->fd[n].ptype = f->ptype;
+            if ((p->fd[n].ep = f->ep)) f->ep->refs++;             /* (a dup'd eventfd copies its counter) */
+            r = (uint64_t)n;
+        }
+        break;
+    }
+    case NR_memfd_create: {
+        /* An unlinked host file under the guest's /data/local/tmp. libcutils makes
+         * ashmem regions this way (sys.use_memfd): CursorWindow, MemoryHeapBase.
+         * Seals are recorded, not enforced. Its path has no leading '/': a
+         * snapshot keeps its mapped pages and reopens the fd on /dev/null.
+         * ART's JIT code cache is refused (ENOSYS, as before memfds): it maps one
+         * twice, RX and RW (it aborted in debugger_interface when MAP_SHARED was a
+         * copy per mapping; the single-view JIT works). Unknown flags are EINVAL:
+         * Chromium's mojo probes the kernel with memfd_create("", ~0) and CHECKs it. */
+        char name[256], g[AOI_PATH], h[AOI_PATH];
+        int d, n;
+        if (a1 & ~(uint64_t)(0x1f | 0x3fu << 26)) { r = err(L_EINVAL); break; }   /* CLOEXEC..EXEC, HUGE_* */
+        if (!gstr(p, a0, name, sizeof name)) { r = err(L_EFAULT); break; }
+        if (strstr(name, "jit") || strstr(name, "code-cache")) { r = err(L_ENOSYS); break; }
+        snprintf(g, sizeof g, "/data/local/tmp/.memfd-XXXXXX");
+        to_host(p, g, h);
+        if (!h[0] || (d = mkstemp(h)) < 0) { r = err(L_ENOMEM); break; }
+        unlink(h);
+        fcntl(d, F_SETFD, FD_CLOEXEC);
+        snprintf(g, sizeof g, "memfd:%s", name);
+        if ((n = fd_new(p, d, g, 0)) < 0) { close(d); r = err(L_EMFILE); break; }
+        p->fd[n].seals = (a1 & 2) ? 0 : 1;                        /* no MFD_ALLOW_SEALING: F_SEAL_SEAL */
+        r = (uint64_t)n;
+        break;
+    }
+    case NR_timerfd_create: {                                      /* clock, TFD_NONBLOCK|TFD_CLOEXEC */
+        int d, n;
+        if (a0 != 0 && a0 != 1 && a0 != 7 && a0 != 8 && a0 != 9) { r = err(L_EINVAL); break; }
+        if ((d = open("/dev/null", O_RDWR | O_CLOEXEC)) < 0) { r = herr(); break; }
+        if ((n = fd_new(p, d, "anon_inode:[timerfd]", 0)) < 0) { close(d); r = err(L_EMFILE); break; }
+        p->fd[n].kind = AOI_FD_TIMERFD;
+        p->fd[n].nonblock = (a1 & 04000) != 0;
+        p->fd[n].tnext = p->fd[n].tint = 0;
+        p->fd[n].tclock = (a0 == 0 || a0 == 8) ? 0 : 1;
+        r = (uint64_t)n;
+        break;
+    }
+    case NR_timerfd_settime: case NR_timerfd_gettime: {
+        /* struct itimerspec { interval, value }, each { sec, nsec } */
+        int64_t it[4], now = now_ns(), left;
+        uint64_t out = nr == NR_timerfd_gettime ? a1 : a3;
+        if (!(f = fd_get(p, a0)) || f->kind != AOI_FD_TIMERFD) { r = err(f ? L_EINVAL : L_EBADF); break; }
+        timer_settle(f);
+        if (out) {                                                 /* the old (or current) setting */
+            left = f->tnext ? f->tnext - now : 0;
+            if (left < 0) left = 0;
+            it[0] = f->tint / 1000000000; it[1] = f->tint % 1000000000;
+            it[2] = left / 1000000000; it[3] = left % 1000000000;
+            if (!put(p, out, it, 32)) { r = err(L_EFAULT); break; }
+        }
+        if (nr == NR_timerfd_gettime) { r = 0; break; }
+        if (!get(p, a2, it, 32)) { r = err(L_EFAULT); break; }
+        if (it[1] < 0 || it[1] >= 1000000000 || it[3] < 0 || it[3] >= 1000000000) { r = err(L_EINVAL); break; }
+        f->tint = it[0] * 1000000000 + it[1];
+        left = it[2] * 1000000000 + it[3];
+        f->count = 0;
+        if (!left) f->tnext = 0;                                   /* disarm */
+        else if (!(a1 & 1)) f->tnext = now + left;                 /* relative */
+        else if (f->tclock) f->tnext = left;                       /* TFD_TIMER_ABSTIME, monotonic */
+        else {
+            struct timespec rt;
+            clock_gettime(CLOCK_REALTIME, &rt);
+            f->tnext = now + (left - ((int64_t)rt.tv_sec * 1000000000 + rt.tv_nsec));
+            if (f->tnext <= 0) f->tnext = 1;
+        }
+        r = 0;
+        break;
+    }
+    case 5: case 6: case 7: case 8: case 9: case 10: case 11: case 12: case 13: case 14: case 15: case 16:
+        r = err(L_ENOTSUP);                                        /* *xattr: no extended attributes */
+        break;
+    case 228: case 229: case 230: case 231: case 284:              /* mlock, munlock, mlockall, munlockall, mlock2 */
+        r = 0;
+        break;
+    case NR_eventfd2: case NR_epoll_create1: {
+        int d, n;
+        if (nr == NR_eventfd2 ? (a1 & ~(uint64_t)(1 | 04000 | 02000000)) != 0   /* SEMAPHORE, NONBLOCK, CLOEXEC */
+                              : (a0 & ~(uint64_t)02000000) != 0) { r = err(L_EINVAL); break; }   /* (mojo probes) */
+        if ((d = open("/dev/null", O_RDWR | O_CLOEXEC)) < 0) { r = herr(); break; }
+        if ((n = fd_new(p, d, nr == NR_eventfd2 ? "anon_inode:[eventfd]" : "anon_inode:[eventpoll]", 0)) < 0) {
+            close(d); r = err(L_EMFILE); break;
+        }
+        if (nr == NR_eventfd2) {                                   /* initval, EFD_SEMAPHORE|NONBLOCK|CLOEXEC */
+            int k;
+            p->fd[n].kind = AOI_FD_EVENTFD;
+            p->fd[n].count = (uint32_t)a0;
+            p->fd[n].sem = (a1 & 1) != 0;
+            for (k = 1; k < AOI_PROC_EVFDS && p->ev[k].refs; k++) {}
+            if (k < AOI_PROC_EVFDS) {                              /* its counter, shared by its dups */
+                p->ev[k].refs = 1; p->ev[k].count = (uint32_t)a0; p->ev[k].sem = (a1 & 1) != 0;
+                p->fd[n].evid = k;
+            }
+            p->fd[n].nonblock = (a1 & 04000) != 0;
+        } else {
+            if (!(p->fd[n].ep = calloc(1, sizeof *p->fd[n].ep))) { p->fd[n].used = 0; close(d); r = err(L_ENOMEM); break; }
+            p->fd[n].ep->refs = 1;
+            p->fd[n].kind = AOI_FD_EPOLL;
+        }
+        r = (uint64_t)n;
+        break;
+    }
+    case NR_epoll_ctl:
+        if (!(f = fd_get(p, a0)) || f->kind != AOI_FD_EPOLL) { r = err(f ? L_EINVAL : L_EBADF); break; }
+        r = sys_epoll_ctl(p, f, (int)a1, (int)a2, a3);
+        break;
+    case NR_epoll_pwait:
+        if (!(f = fd_get(p, a0)) || f->kind != AOI_FD_EPOLL) { r = err(f ? L_EINVAL : L_EBADF); break; }
+        r = sys_epoll_pwait(p, f, a1, (int)a2, (int)a3);
+        break;
+    case NR_ppoll:
+        r = sys_ppoll(p, a0, a1, a2);
+        break;
+    case NR_pipe2: {                                               /* host pipe, non-blocking underneath */
+        int hp[2], n0, n1;
+        int32_t gfd[2];
+        if (a1 & ~(uint64_t)(04000 | 02000000)) { r = err(L_EINVAL); break; }   /* O_NONBLOCK, O_CLOEXEC */
+        if (pipe(hp)) { r = herr(); break; }
+        fcntl(hp[0], F_SETFL, O_NONBLOCK); fcntl(hp[1], F_SETFL, O_NONBLOCK);
+        fcntl(hp[0], F_SETFD, FD_CLOEXEC); fcntl(hp[1], F_SETFD, FD_CLOEXEC);
+        if ((n0 = fd_new(p, hp[0], "pipe:[0]", 0)) < 0) { close(hp[0]); close(hp[1]); r = err(L_EMFILE); break; }
+        if ((n1 = fd_new(p, hp[1], "pipe:[0]", 0)) < 0) { p->fd[n0].used = 0; close(hp[0]); close(hp[1]); r = err(L_EMFILE); break; }
+        p->fd[n0].kind = p->fd[n1].kind = AOI_FD_PIPE;
+        p->fd[n0].nonblock = p->fd[n1].nonblock = (a1 & 04000) != 0;
+        aoi_proc_pair(p, n0, n1, 0);
+        gfd[0] = n0; gfd[1] = n1;
+        r = put(p, a0, gfd, 8) ? 0 : err(L_EFAULT);
+        break;
+    }
+    case NR_socketpair: {                                          /* AF_UNIX: a host pair, non-blocking underneath */
+        int hv[2], t = (int)(a1 & 0xf), n0, n1, ht;
+        int32_t gfd[2];
+        if (a0 != 1) { r = err(L_EAFNOSUPPORT); break; }
+        ht = t == 1 ? SOCK_STREAM : t == 2 ? SOCK_DGRAM : t == 5 ? SOCK_SEQPACKET : -1;
+        if (ht < 0) { r = err(L_EINVAL); break; }
+        if (ht == SOCK_SEQPACKET ? aoi_host_msgpair(hv) : socketpair(AF_UNIX, ht, 0, hv)) { r = herr(); break; }
+        fcntl(hv[0], F_SETFL, O_NONBLOCK); fcntl(hv[1], F_SETFL, O_NONBLOCK);
+        fcntl(hv[0], F_SETFD, FD_CLOEXEC); fcntl(hv[1], F_SETFD, FD_CLOEXEC);
+        if ((n0 = fd_new(p, hv[0], "socket:[pair]", 0)) < 0) { close(hv[0]); close(hv[1]); r = err(L_EMFILE); break; }
+        if ((n1 = fd_new(p, hv[1], "socket:[pair]", 0)) < 0) { p->fd[n0].used = 0; close(hv[0]); close(hv[1]); r = err(L_EMFILE); break; }
+        p->fd[n0].kind = p->fd[n1].kind = AOI_FD_PIPE;
+        p->fd[n0].nonblock = p->fd[n1].nonblock = (a1 & 04000) != 0;   /* SOCK_NONBLOCK */
+        aoi_proc_pair(p, n0, n1, t);
+        gfd[0] = n0; gfd[1] = n1;
+        r = put(p, a3, gfd, 8) ? 0 : err(L_EFAULT);
+        break;
+    }
+    case NR_sendto: case NR_recvfrom: {                            /* on host-backed sockets; addresses ignored */
+        if (!(f = fd_get(p, a0))) { r = err(L_EBADF); break; }
+        if (f->kind == AOI_FD_INET) {
+            r = nr == NR_sendto ? net_sendto(p, f, a1, a2, a3, a4, a5) : net_recvfrom(p, f, a1, a2, a3, a4, a5);
+            break;
+        }
+        if (f->kind == AOI_FD_DNS && nr == NR_sendto) { r = dns_write(p, f, a1, a2); break; }
+        if (f->kind != AOI_FD_PIPE && f->kind != AOI_FD_DNS) { r = err(L_ENOTSOCK); break; }
+        r = a2 ? (uint64_t)xfer(p, f->host, a1, a2, nr == NR_recvfrom, -1) : 0;
+        if (r == err(L_EAGAIN) && !f->nonblock && !(a3 & 0x40)) r = block_and_retry(p, 1000000);   /* MSG_DONTWAIT */
+        if (nr == NR_recvfrom && a5 && (int64_t)r >= 0) { uint32_t z = 0; put(p, a5, &z, 4); }   /* *addrlen = 0 */
+        break;
+    }
+    case NR_setsockopt:                                            /* buffer sizes and the like: accepted */
+        r = (f = fd_get(p, a0)) && f->kind == AOI_FD_INET ? net_sockopt(p, f, a1, a2, a3, a4, 1) : 0;
+        break;
+    case NR_getsockopt: {
+        if ((f = fd_get(p, a0)) && f->kind == AOI_FD_INET) { r = net_sockopt(p, f, a1, a2, a3, a4, 0); break; }                                          /* an int option: 0, or the buffer size */
+        uint32_t v = (a1 == 1 && (a2 == 7 || a2 == 8)) ? 65536 : 0, l = 4;   /* SO_SNDBUF / SO_RCVBUF */
+        if (a3) put(p, a3, &v, 4);
+        if (a4) put(p, a4, &l, 4);
+        r = 0;
+        break;
+    }
+    case 269: case 243: {                                          /* sendmmsg, recvmmsg (glibc's resolver: A + AAAA) */
+        uint64_t i, n = nr == 269 ? a2 : a2, flags = nr == 269 ? a3 : a3;
+        if (!(f = fd_get(p, a0))) { r = err(L_EBADF); break; }
+        if (f->kind != AOI_FD_INET && f->kind != AOI_FD_PIPE) { r = err(L_ENOTSOCK); break; }
+        if (n > 1024) n = 1024;
+        r = 0;
+        for (i = 0; i < n; i++) {
+            uint64_t k = f->kind == AOI_FD_PIPE ? unix_msg(p, f, a1 + 64 * i, i ? flags | 0x40 : flags, nr == 243)
+                                                : net_msg(p, f, a1 + 64 * i, i ? flags | 0x40 : flags, nr == 243);
+            uint32_t len32;
+            if (IS_ERR(k) || c->stop == AOI_STOP_RESTART) { if (!i) r = k; break; }
+            len32 = (uint32_t)k;
+            if (!put(p, a1 + 64 * i + 56, &len32, 4)) { r = err(L_EFAULT); break; }
+            r = i + 1;
+            if (nr == 243 && (flags & 0x10000)) flags |= 0x40;    /* MSG_WAITFORONE: the rest without waiting */
+        }
+        break;
+    }
+    case NR_bind: case NR_listen: case NR_shutdown: case NR_getsockname: case NR_getpeername:
+    case NR_accept: case NR_accept4: case NR_sendmsg: case NR_recvmsg: {
+        struct sockaddr_storage sa;
+        socklen_t sl = sizeof sa;
+        if (!(f = fd_get(p, a0))) { r = err(L_EBADF); break; }
+        if (f->kind == AOI_FD_PIPE && (nr == NR_sendmsg || nr == NR_recvmsg)) {   /* a socketpair end */
+            r = unix_msg(p, f, a1, a2, nr == NR_recvmsg);
+            break;
+        }
+        if (f->kind == AOI_FD_PIPE && nr == NR_shutdown) {          /* a socketpair end (Java's close marker) */
+            r = shutdown(f->host, (int)a1) && errno != ENOTSOCK ? herr() : 0;
+            break;
+        }
+        if (f->kind != AOI_FD_INET) { r = err(L_ENOSYS); break; }  /* other AF_UNIX: as before */
+        memset(&sa, 0, sizeof sa);
+        if (nr == NR_bind) r = get_sa(p, a1, a2, &sa, &sl, f->v4) ? err(L_EINVAL) : bind(f->host, (struct sockaddr *)&sa, sl) ? herr() : 0;
+        else if (nr == NR_listen) r = listen(f->host, (int)a1) ? herr() : 0;
+        else if (nr == NR_shutdown) r = shutdown(f->host, (int)a1) ? herr() : 0;
+        else if (nr == NR_accept || nr == NR_accept4) r = net_accept(p, f, a1, a2, nr == NR_accept4 ? a3 : 0);
+        else if (nr == NR_sendmsg || nr == NR_recvmsg) r = net_msg(p, f, a1, a2, nr == NR_recvmsg);
+        else {
+            int k = nr == NR_getsockname ? getsockname(f->host, (struct sockaddr *)&sa, &sl) : getpeername(f->host, (struct sockaddr *)&sa, &sl);
+            if (k) r = herr(); else { put_sa(p, a1, a2, (struct sockaddr *)&sa, f->v4); r = 0; }
+        }
+        break;
+    }
+    case NR_socket: {                                              /* AF_UNIX: logd, dnsproxyd; AF_INET(6) */
+        int n, d;
+        if (a0 == 2 || a0 == 10) { r = net_socket(p, a0, a1, a2); break; }
+        if (a0 != 1) { r = err(L_EAFNOSUPPORT); break; }
+        if ((d = open("/dev/null", O_RDWR | O_CLOEXEC)) < 0) { r = herr(); break; }
+        if ((n = fd_new(p, d, "socket:[unix]", 0)) < 0) { close(d); r = err(L_EMFILE); break; }
+        p->fd[n].kind = AOI_FD_SOCKET;
+        r = (uint64_t)n;
+        break;
+    }
+    case NR_connect: {
+        char path[110];
+        uint8_t sa[110];
+        if (!(f = fd_get(p, a0)) || f->kind == AOI_FD_FILE) { r = err(L_ENOTSOCK); break; }
+        if (f->kind == AOI_FD_INET) { r = net_connect(p, f, a1, a2); break; }
+        memset(sa, 0, sizeof sa);
+        if (a2 < 3 || !get(p, a1, sa, a2 < sizeof sa ? a2 : sizeof sa - 1)) { r = err(L_EFAULT); break; }
+        memcpy(path, sa + 2, sizeof path - 2); path[sizeof path - 3] = 0;
+        if (!strcmp(path, "/dev/socket/logdw")) { f->kind = AOI_FD_LOGD; r = 0; }
+        else if (!strcmp(path, "/dev/socket/dnsproxyd")) r = dns_open(p, f);
+        else r = err(L_ECONNREFUSED);                              /* no other daemons yet */
+        break;
+    }
+    case NR_membarrier:                                            /* one thread: every barrier is trivially done */
+        r = a0 == 0 ? (1 << 3 | 1 << 4) : 0;                       /* QUERY: PRIVATE_EXPEDITED (+REGISTER) */
+        break;
+    case NR_getpgid: case NR_getsid:
+        if (!p->linux_mode) { r = GUEST_PID; break; }
+        r = lx_getpgid(p, (int)(int32_t)a0, nr == NR_getsid);
+        break;
+    case NR_setpgid:
+        r = p->linux_mode ? lx_setpgid(p, (int)(int32_t)a0, (int)(int32_t)a1) : 0;
+        break;
+    case 157:                                                      /* setsid */
+        if (!p->linux_mode) { r = GUEST_PID; break; }
+        if (p->pgid == p->pid) { r = err(L_EPERM); break; }
+        p->sid = p->pgid = p->pid;
+        r = (uint64_t)p->pid;
+        break;
+    case NR_fchmod:
+        if (!(f = fd_get(p, a0))) { r = err(L_EBADF); break; }
+        r = fchmod(f->host, lx_mode(p, f->host, NULL, (mode_t)a1 & 07777)) ? herr() : 0;
+        break;
+    case NR_fchmodat:
+        if ((rc = at_path(p, sx32(a0), a1, 1, g))) { r = err(rc); break; }
+        to_host(p, g, h);
+        r = chmod(h, lx_mode(p, -1, h, (mode_t)a2 & 07777)) ? herr() : 0;
+        break;
+    case NR_fchown: case NR_fchownat:                              /* one user: accepted, not applied */
+        r = nr == NR_fchown && !fd_get(p, a0) ? err(L_EBADF) : 0;
+        break;
+    case NR_mkdirat:
+        if ((rc = at_path(p, sx32(a0), a1, 0, g))) { r = err(rc); break; }
+        to_host(p, g, h);
+        r = mkdir(h, (mode_t)(a2 & 07777) | (p->linux_mode ? 0700 : 0)) ? herr() : 0;
+        break;
+    case NR_unlinkat:
+        if ((rc = at_path(p, sx32(a0), a1, 0, g))) { r = err(rc); break; }
+        to_host(p, g, h);
+        r = ((a2 & 0x200) ? rmdir(h) : unlink(h)) ? herr() : 0;   /* AT_REMOVEDIR */
+        break;
+    case NR_renameat: case NR_renameat2: {
+        char g2[AOI_PATH], h2[AOI_PATH];
+        if (nr == NR_renameat2 && a4) { r = err(L_EINVAL); break; }
+        if ((rc = at_path(p, sx32(a0), a1, 0, g)) || (rc = at_path(p, sx32(a2), a3, 0, g2))) { r = err(rc); break; }
+        to_host(p, g, h); to_host(p, g2, h2);
+        r = rename(h, h2) ? herr() : 0;
+        break;
+    }
+    case NR_symlinkat: {
+        char target[AOI_PATH];
+        if (!gstr(p, a0, target, sizeof target)) { r = err(L_EFAULT); break; }
+        if ((rc = at_path(p, sx32(a1), a2, 0, g))) { r = err(rc); break; }
+        to_host(p, g, h);
+        r = symlink(target, h) ? herr() : 0;                       /* target stays a guest path */
+        break;
+    }
+    case NR_linkat: {
+        char g2[AOI_PATH], h2[AOI_PATH];
+        if ((rc = at_path(p, sx32(a0), a1, 0, g)) || (rc = at_path(p, sx32(a2), a3, 0, g2))) { r = err(rc); break; }
+        to_host(p, g, h); to_host(p, g2, h2);
+        r = link(h, h2) ? herr() : 0;
+        break;
+    }
+    case 45:                                                       /* truncate(path, length) */
+        if ((rc = at_path(p, -100, a0, 0, g))) { r = err(rc); break; }
+        to_host(p, g, h);
+        r = truncate(h, (off_t)a1) ? herr() : 0;
+        break;
+    case NR_ftruncate:
+        if (!(f = fd_get(p, a0))) { r = err(L_EBADF); break; }
+        r = ftruncate(f->host, (off_t)a1) ? herr() : 0;
+        break;
+    case 33:                                                       /* mknodat(dirfd, path, mode, dev): FIFOs */
+        if ((rc = at_path(p, sx32(a0), a1, 0, g))) { r = err(rc); break; }
+        to_host(p, g, h);
+        if ((a2 & 0170000) == 0010000) r = mkfifo(h, (mode_t)(a2 & 07777)) ? herr() : 0;
+        else if ((a2 & 0170000) == 0100000 || !(a2 & 0170000)) {   /* a regular file */
+            int d = open(h, O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, (mode_t)(a2 & 07777));
+            r = d < 0 ? herr() : (close(d), 0);
+        } else r = err(L_EPERM);                                   /* devices: not ours to make */
+        break;
+    case 47: {                                                     /* fallocate(fd, mode, offset, len) */
+        struct stat fs;
+        if (!(f = fd_get(p, a0))) { r = err(L_EBADF); break; }
+        if (a1 & ~1ULL) { r = err(L_ENOTSUP); break; }             /* punch hole, collapse...: no */
+        if ((int64_t)a2 < 0 || (int64_t)a3 <= 0) { r = err(L_EINVAL); break; }
+        if (fstat(f->host, &fs)) { r = herr(); break; }
+        /* the space is there when written (no preallocation here); without KEEP_SIZE
+         * the file grows to the range's end (Realm's posix_fallocate) */
+        r = (!(a1 & 1) && (uint64_t)fs.st_size < a2 + a3 && ftruncate(f->host, (off_t)(a2 + a3))) ? herr() : 0;
+        break;
+    }
+    case NR_fsync: case NR_fdatasync:
+        if (!(f = fd_get(p, a0))) { r = err(L_EBADF); break; }
+        r = fsync(f->host) ? herr() : 0;
+        break;
+    case NR_utimensat:                                             /* timestamps: accepted, not applied */
+        r = 0;
+        break;
+    case NR_userfaultfd: {                                         /* see uffd_ioctl */
+        int n, d;
+        if (!p->uffd) { r = err(L_ENOSYS); break; }               /* see docs/STATUS.md: boot image under CMC */
+        if ((d = open("/dev/null", O_RDWR | O_CLOEXEC)) < 0) { r = herr(); break; }
+        if ((n = fd_new(p, d, "anon_inode:[userfaultfd]", 0)) < 0) { close(d); r = err(L_EMFILE); break; }
+        p->fd[n].kind = AOI_FD_UFFD;
+        r = (uint64_t)n;
+        break;
+    }
+    case NR_ioctl:
+        if ((f = fd_get(p, a0)) && f->kind == AOI_FD_INET && (a1 == 0x541b || a1 == 0x5421)) {   /* FIONREAD, FIONBIO */
+            int v = 0;
+            if (a1 == 0x5421) { r = get(p, a2, &v, 4) ? (f->nonblock = v != 0, 0) : err(L_EFAULT); break; }
+            r = ioctl(f->host, FIONREAD, &v) ? herr() : put(p, a2, &v, 4) ? 0 : err(L_EFAULT);
+            break;
+        }
+        if ((f = fd_get(p, a0)) && f->kind == AOI_FD_TTY) { r = tty_ioctl(p, f, a1, a2); break; }
+        if ((f = fd_get(p, a0)) && f->kind == AOI_FD_DMAHEAP) {
+            uint8_t ad[24];                                        /* dma_heap_allocation_data {len, fd, fd_flags, heap_flags} */
+            uint64_t len;
+            int n;
+            if (a1 != 0xc0184800) { r = err(L_ENOTTY); break; }    /* DMA_HEAP_IOCTL_ALLOC */
+            if (!get(p, a2, ad, sizeof ad)) { r = err(L_EFAULT); break; }
+            memcpy(&len, ad, 8);
+            if ((n = aoi_proc_memfd(p, "dmabuf", len)) < 0) { r = err(L_ENOMEM); break; }
+            p->fd[n].seals = 0;
+            put32(ad, 8, (uint32_t)n);
+            r = put(p, a2, ad, sizeof ad) ? 0 : err(L_EFAULT);
+            break;
+        }
+        if ((f = fd_get(p, a0)) && f->kind == AOI_FD_FILE && !strcmp(f->path, "memfd:dmabuf") && ((a1 >> 8) & 0xff) == 'b') {
+            r = 0;                                                 /* DMA_BUF_IOCTL_SYNC, _SET_NAME: nothing to do */
+            break;
+        }
+        if ((f = fd_get(p, a0)) && f->kind == AOI_FD_BINDER) {
+            int block;
+            r = aoi_binder_ioctl(p, a1, a2, &block, !strcmp(f->path, "/dev/hwbinder"));
+            if (block) r = block_and_retry(p, 5000000);             /* a looper waits for work */
+            break;
+        }
+        if ((f = fd_get(p, a0)) && f->kind == AOI_FD_UFFD) {
+            if (a1 == 0xc018aa3f) {                                /* UFFDIO_API {api, features, ioctls} */
+                uint64_t api[3];
+                if (!get(p, a2, api, 24)) { r = err(L_EFAULT); break; }
+                if (api[0] != 0xaa) { r = err(L_EINVAL); break; }
+                api[1] = 1u << 7;                                  /* SIGBUS mode only: no shmem, no minor faults */
+                api[2] = 1ULL << 0x3f | 1ULL << 0 | 1ULL << 1;     /* API, REGISTER, UNREGISTER */
+                r = put(p, a2, api, 24) ? 0 : err(L_EFAULT);
+            } else if (a1 == 0xc020aa00) {                         /* UFFDIO_REGISTER {start, len, mode, ioctls} */
+                uint64_t rg[4];
+                if (!get(p, a2, rg, 32)) { r = err(L_EFAULT); break; }
+                if (rg[0] % PAGE || !rg[1] || rg[1] % PAGE || rg[2] != 1) { r = err(L_EINVAL); break; }   /* MISSING only */
+                if (!mapped(p, rg[0], rg[1])) { r = err(L_ENOMEM); break; }
+                if (p->nuffd_reg == (int)(sizeof p->uffd_reg / sizeof p->uffd_reg[0])) { r = err(L_ENOMEM); break; }
+                p->uffd_reg[p->nuffd_reg].start = rg[0];
+                p->uffd_reg[p->nuffd_reg++].len = rg[1];
+                rg[3] = 1ULL << 2 | 1ULL << 3 | 1ULL << 4;          /* WAKE, COPY, ZEROPAGE */
+                r = put(p, a2, rg, 32) ? 0 : err(L_EFAULT);
+            } else if (a1 == 0x8010aa01) {                         /* UFFDIO_UNREGISTER {start, len} */
+                uint64_t rg[2];
+                int i, j;
+                if (!get(p, a2, rg, 16)) { r = err(L_EFAULT); break; }
+                for (i = j = 0; i < p->nuffd_reg; i++) {           /* drop the ranges inside, trim the others */
+                    uint64_t s0 = p->uffd_reg[i].start, e0 = s0 + p->uffd_reg[i].len, e1 = rg[0] + rg[1];
+                    if (s0 >= rg[0] && e0 <= e1) continue;
+                    if (s0 < rg[0] && e0 > rg[0]) e0 = rg[0];
+                    else if (s0 < e1 && e0 > e1) s0 = e1;
+                    p->uffd_reg[j].start = s0; p->uffd_reg[j++].len = e0 - s0;
+                }
+                p->nuffd_reg = j;
+                uffd_fill(p, rg[0], rg[1]);                        /* unwatched now: zero-fill on demand */
+                r = 0;
+            } else if (a1 == 0xc028aa03 || a1 == 0xc020aa04) {    /* UFFDIO_COPY {dst, src, len, mode, copy} / ZEROPAGE */
+                uint64_t u[5], o, dst, len;
+                int zero = a1 == 0xc020aa04;
+                uint8_t pg[4096];
+                if (!get(p, a2, u, zero ? 32 : 40)) { r = err(L_EFAULT); break; }
+                dst = u[0]; len = zero ? u[1] : u[2];
+                if (dst % PAGE || len % PAGE || !len) { r = err(L_EINVAL); break; }
+                for (o = 0, r = 0; o < len; o += PAGE) {
+                    if (!mapped(p, dst + o, PAGE)) { r = err(L_ENOENT); break; }
+                    if (!(p->vm.prot[(dst + o) / PAGE] & AOI_PROT_MISSING)) { r = err(L_EEXIST); break; }
+                    if (!zero && !get(p, u[1] + o, pg, PAGE)) { r = err(L_EFAULT); break; }
+                    aoi_vm_set_missing(&p->vm, dst + o, PAGE, 0);
+                    /* a missing page reads as zero already (aoi_vm_set_missing cleared it): a zero
+                     * page is not written, so it takes no host memory, as the kernel's shared zero
+                     * page. ART's GC zero-fills a whole moving space (1 GB for Chromium) this way. */
+                    if (!zero && !all_zero(pg, PAGE)) aoi_vm_write(&p->vm, dst + o, pg, PAGE, 0);
+                }
+                u[zero ? 3 : 4] = o ? o : r;                       /* bytes done, or the error */
+                put(p, a2, u, zero ? 32 : 40);
+            } else if (a1 == 0x8010aa02) {                         /* UFFDIO_WAKE: nobody sleeps in SIGBUS mode */
+                r = 0;
+            } else {
+                if (p->trace) fprintf(p->trace, "[uffd] ioctl %#llx not implemented\n", (unsigned long long)a1);
+                r = err(L_EINVAL);
+            }
+            break;
+        }
+        r = err(L_ENOTTY);
+        break;
+    case NR_mmap:
+        r = sys_mmap(p, a0, a1, (int)a2, (int)a3, sx32(a4), a5);
+        break;
+    case NR_munmap:
+        if (p->nshm) shm_sync(p, a0, up(a1, PAGE), 1);
+        r = (uint64_t)(int64_t)aoi_vm_unmap(&p->vm, a0, a1);
+        if (!r) {                                                  /* a shared mapping's pad, around it */
+            uint64_t s0 = down(a0, PAGE), e0 = up(a0 + a1, PAGE), x;
+            for (x = e0; x < p->vm.size && (x & (SHARED_PAGE - 1)) && (p->vm.prot[x / PAGE] & AOI_PROT_SLACK); x += PAGE) {}
+            if (x > e0) aoi_vm_unmap(&p->vm, e0, x - e0);
+            for (x = s0; x >= PAGE && (x & (SHARED_PAGE - 1)) && (p->vm.prot[(x - PAGE) / PAGE] & AOI_PROT_SLACK); x -= PAGE) {}
+            if (x < s0) aoi_vm_unmap(&p->vm, x, s0 - x);
+        }
+        break;
+    case NR_msync:
+        shm_sync(p, a0, up(a1, PAGE), 0);
+        r = 0;
+        break;
+    case NR_mprotect:
+        r = (uint64_t)(int64_t)aoi_vm_protect(&p->vm, a0, a1, (int)a2 & 7);
+        break;
+    case NR_mremap: {                                              /* move-and-copy */
+        uint64_t na, keep, prot0;
+        int fixed = (a3 & 2) != 0;                                 /* MREMAP_FIXED: new address in x4 */
+        if (a0 % PAGE || (fixed && (a4 % PAGE || !(a3 & 1)))) { r = err(L_EINVAL); break; }
+        if (!mapped(p, a0, a1 ? a1 : 1)) { r = err(L_EFAULT); break; }
+        if (!fixed && a2 <= a1) {                                  /* shrink in place */
+            if (up(a2, PAGE) < up(a1, PAGE)) aoi_vm_unmap(&p->vm, a0 + up(a2, PAGE), up(a1, PAGE) - up(a2, PAGE));
+            r = a0;
+            break;
+        }
+        if (!(a3 & 1)) { r = err(L_ENOMEM); break; }               /* growing needs MREMAP_MAYMOVE */
+        if (a3 & 4) {                                              /* MREMAP_DONTUNMAP: move the bytes, keep the */
+            if (a1 != a2 || a1 % PAGE) { r = err(L_EINVAL); break; }   /* source mapped but missing (userfaultfd) */
+            if (fixed && a4 < a0 + a1 && a0 < a4 + a1) { r = err(L_EINVAL); break; }
+            prot0 = p->vm.prot[a0 / PAGE] & 7;
+            na = aoi_vm_map(&p->vm, fixed ? a4 : 0, a1, (int)prot0 | AOI_PROT_W, fixed);
+            if (IS_ERR(na)) { r = na; break; }
+            {                                                      /* a file's pages (V8 remapping the builtins */
+                char w[256];                                       /* of libchrome's .text, then checking both */
+                aoi_proc_where(p, a0, w, sizeof w);                /* views agree): the source keeps them */
+                if (w[0] == '/' && strncmp(w, "/dev/", 5)) {
+                    uint64_t o;
+                    for (o = 0; o < a1; o += PAGE) {
+                        uint8_t *src = aoi_vm_ptr(&p->vm, a0 + o, PAGE, 0), *dst = aoi_vm_ptr(&p->vm, na + o, PAGE, 0);
+                        if (src && dst) memcpy(dst, src, PAGE);
+                    }
+                    aoi_vm_protect(&p->vm, na, a1, (int)prot0);
+                    note_map(p, na, a1, 0, "[anon:remapped file]");
+                    r = na;
+                    break;
+                }
+            }
+            uffd_fill(p, a0, a1);                                  /* (missing source pages move as zero) */
+            aoi_vm_move(&p->vm, na, a0, a1);
+            aoi_vm_protect(&p->vm, na, a1, (int)prot0);
+            aoi_vm_set_missing(&p->vm, a0, a1, 1);
+            r = na;
+            break;
+        }
+        if (fixed && a4 < a0 + up(a1, PAGE) && a0 < a4 + up(a2, PAGE)) { r = err(L_EINVAL); break; }
+        prot0 = p->vm.prot[a0 / PAGE] & 7;
+        na = aoi_vm_map(&p->vm, fixed ? a4 : 0, a2, AOI_PROT_R | AOI_PROT_W, fixed);
+        if (IS_ERR(na)) { r = na; break; }
+        keep = a1 < a2 ? a1 : a2;
+        {                                                          /* page by page: the source may be sparse */
+            uint64_t o;
+            for (o = 0; o < keep; o += PAGE) {
+                uint64_t n = keep - o < PAGE ? keep - o : PAGE;
+                uint8_t *src = aoi_vm_ptr(&p->vm, a0 + o, n, 0), *dst = aoi_vm_ptr(&p->vm, na + o, n, 0);
+                if (src && dst) memcpy(dst, src, (size_t)n);
+            }
+        }
+        aoi_vm_protect(&p->vm, na, a2, (int)prot0);
+        aoi_vm_unmap(&p->vm, a0, a1);
+        r = na;
+        break;
+    }
+    case NR_mincore: {                                             /* every mapped page counts as resident */
+        uint64_t q, e = a0 + up(a1, PAGE);
+        uint8_t v[256];
+        if (a0 % PAGE) { r = err(L_EINVAL); break; }
+        if (!mapped(p, a0, a1 ? a1 : 1)) { r = err(L_ENOMEM); break; }
+        for (q = a0, r = 0; q < e; q += sizeof v * PAGE) {
+            uint64_t k, n = (e - q) / PAGE < sizeof v ? (e - q) / PAGE : sizeof v;
+            for (k = 0; k < n; k++) v[k] = !(p->vm.prot[q / PAGE + k] & AOI_PROT_MISSING);
+            if (!put(p, a2 + (q - a0) / PAGE, v, n)) { r = err(L_EFAULT); break; }
+        }
+        break;
+    }
+    case NR_madvise:
+        if (a2 == 4 || a2 == 9) {                                  /* MADV_DONTNEED / MADV_REMOVE: reads back as zero */
+            uint64_t q, e = a0 + up(a1, PAGE), n;
+            if (mapped(p, a0, a1))
+                for (q = a0; q < e; q = n) {                       /* in runs: whole host pages are released, */
+                    int w = uffd_watched(p, q), k = (p->vm.prot[q / PAGE] & AOI_PROT_W) != 0;   /* not written */
+                    for (n = q + PAGE; n < e && uffd_watched(p, n) == w
+                         && ((p->vm.prot[n / PAGE] & AOI_PROT_W) != 0) == k; n += PAGE) {}
+                    if (w) aoi_vm_set_missing(&p->vm, q, n - q, 1);   /* zapped: missing again */
+                    else if (k) aoi_vm_zero(&p->vm, q, n - q);
+                }
+        }
+        r = 0;
+        break;
+    case NR_brk:
+        r = p->brk;                                                /* fixed: bionic does not grow it */
+        break;
+    case NR_exit: case NR_exit_group:
+        if (p->vf && p->cur == p->vf->thread) {                    /* a vfork child that did not exec */
+            struct aoi_child *ch = child_new(p);
+            int pid = p->vf->pid;
+            if (ch) { ch->pid = pid; ch->status = (int)(a0 & 0xff) << 8; ch->done = 1; }
+            vfork_end(p, c, (uint64_t)pid);
+            r = (uint64_t)pid;
+            break;
+        }
+        c->exit_code = (int)a0;
+        c->stop = AOI_STOP_EXIT;
+        p->thread_exit = nr == NR_exit;                            /* exit ends only this thread */
+        r = 0;
+        break;
+    case NR_set_tid_address:
+        p->th[p->cur].clear_tid = a0;
+        r = (uint64_t)p->th[p->cur].tid;
+        break;
+    case NR_gettid: r = p->vf && p->cur == p->vf->thread ? (uint64_t)p->vf->pid : (uint64_t)p->th[p->cur].tid; break;
+    case NR_getpid: r = p->vf && p->cur == p->vf->thread ? (uint64_t)p->vf->pid : (uint64_t)PID(p); break;
+    case 221:                                                      /* execve: a vfork child's (Runtime.exec), */
+        r = (p->vf && p->cur == p->vf->thread) || p->linux_mode ? vfork_exec(p, c, a0, a1, a2) : err(L_ENOSYS);
+        break;                                                     /* or in place (Linux mode) */
+    case NR_clone: {                                               /* threads and vfork; fork is not done */
+        int i;
+        struct aoi_thread *t = NULL;
+        if ((a0 & 0x14100) == 0x4100) { r = vfork_start(p, c, a1); break; }   /* vfork: a child process (Runtime.exec) */
+        if (!(a0 & 0x100) && p->linux_mode) { r = lx_fork(p, c, a0, a3, a4); break; }   /* fork: a copy of memory */
+        if (!(a0 & 0x100) || !(a0 & 0x10000)) { r = err(L_ENOSYS); break; }   /* fork: Linux mode only */
+        for (i = 0; i < AOI_PROC_THREADS; i++) if (p->th[i].state == AOI_T_FREE) { t = &p->th[i]; break; }
+        if (!t) { r = err(L_EAGAIN); break; }
+        memset(t, 0, sizeof *t);
+        t->tid = p->linux_mode ? lx_newpid() : p->next_tid++;
+        t->cpu = *c;
+        t->cpu.x[0] = 0;
+        t->cpu.pc = c->pc + 4;                                     /* the child returns from this svc */
+        if (a1) t->cpu.sp = a1;
+        if (a0 & 0x80000) t->cpu.tpidr = a3;                       /* CLONE_SETTLS */
+        t->cpu.excl_valid = 0;
+        t->cpu.stop = AOI_RUN;
+        if (a0 & 0x200000) t->clear_tid = a4;                      /* CLONE_CHILD_CLEARTID */
+        {
+            uint32_t tid32 = (uint32_t)t->tid;
+            if ((a0 & 0x100000) && !put(p, a2, &tid32, 4)) { r = err(L_EFAULT); break; }   /* PARENT_SETTID */
+            if ((a0 & 0x1000000) && !put(p, a4, &tid32, 4)) { r = err(L_EFAULT); break; }  /* CHILD_SETTID */
+        }
+        t->state = AOI_T_RUN;
+        r = (uint64_t)t->tid;
+        break;
+    }
+    case NR_getppid: r = p->ppid ? (uint64_t)p->ppid : 1; break;
+    case NR_getuid: case NR_geteuid: case NR_getgid: case NR_getegid:
+        r = !p->linux_mode ? p->uid : p->cred[nr == NR_getuid ? 0 : nr == NR_geteuid ? 1 : nr == NR_getgid ? 3 : 4];
+        break;
+    case 148: case 150: {                                          /* getresuid, getresgid */
+        uint32_t u = p->uid, *cr = p->cred + (nr == 148 ? 0 : 3);
+        if (p->linux_mode) r = put(p, a0, cr, 4) && put(p, a1, cr + 1, 4) && put(p, a2, cr + 2, 4) ? 0 : err(L_EFAULT);
+        else r = put(p, a0, &u, 4) && put(p, a1, &u, 4) && put(p, a2, &u, 4) ? 0 : err(L_EFAULT);
+        break;
+    }
+    case 146: case 144: case 145: case 143: case 147: case 149: {  /* setuid, setgid, setre*id, setres*id */
+        /* Linux mode: credentials are tracked as the kernel does (apt drops to _apt and
+         * checks it cannot get back), but not enforced on files: the host owns them all. */
+        int gid = nr == 144 || nr == 143 || nr == 149;
+        uint32_t *cr = p->cred + (gid ? 3 : 0), want[3];
+        int priv = p->cred[1] == 0, k;
+        if (!p->linux_mode) { r = err(L_ENOSYS); break; }   /* (Android: as before) */
+        want[0] = want[1] = want[2] = 0xffffffffu;
+        if (nr == 146 || nr == 144) {                              /* set*id(x) */
+            if (priv) want[0] = want[1] = want[2] = (uint32_t)a0;
+            else want[1] = (uint32_t)a0;
+        } else if (nr == 145 || nr == 143) {                       /* setre*id(r, e) */
+            want[0] = (uint32_t)a0; want[1] = (uint32_t)a1;
+            if (want[0] != 0xffffffffu || (want[1] != 0xffffffffu && want[1] != cr[0])) want[2] = want[1] != 0xffffffffu ? want[1] : cr[1];
+        } else { want[0] = (uint32_t)a0; want[1] = (uint32_t)a1; want[2] = (uint32_t)a2; }
+        r = 0;
+        if (!priv)
+            for (k = 0; k < 3; k++)
+                if (want[k] != 0xffffffffu && want[k] != cr[0] && want[k] != cr[1] && want[k] != cr[2]) r = err(L_EPERM);
+        if (r) break;
+        for (k = 0; k < 3; k++) if (want[k] != 0xffffffffu) cr[k] = want[k];
+        if (p->trace) fprintf(p->trace, "[proc] %d credentials uid %u/%u/%u gid %u/%u/%u\n", p->pid,
+                              p->cred[0], p->cred[1], p->cred[2], p->cred[3], p->cred[4], p->cred[5]);
+        break;
+    }
+    case NR_umask: r = 022; break;
+    case NR_set_robust_list: r = 0; break;
+    case NR_futex: {
+        int op = (int)a1 & 127;                                    /* minus PRIVATE / CLOCK_REALTIME */
+        uint64_t addr = a0 & 0x00ffffffffffffffULL;
+        uint8_t w[4];
+        if (op == 0 || op == 9) {                                  /* WAIT / WAIT_BITSET */
+            struct aoi_thread *t = &p->th[p->cur];
+            int64_t deadline = 0;
+            if (!get(p, a0, w, 4)) { r = err(L_EFAULT); break; }
+            if (u32(w) != (uint32_t)a2) { r = err(L_EAGAIN); break; }
+            if (op == 9 && !(uint32_t)a5) { r = err(L_EINVAL); break; }
+            if (a3) {
+                uint8_t ts[16];
+                int64_t v;
+                if (!get(p, a3, ts, 16)) { r = err(L_EFAULT); break; }
+                v = (int64_t)u64(ts) * 1000000000 + (int64_t)u64(ts + 8);
+                if (op == 0) deadline = now_ns() + v;              /* relative */
+                else if (a1 & 256) {                               /* absolute, CLOCK_REALTIME */
+                    struct timespec rt;
+                    clock_gettime(CLOCK_REALTIME, &rt);
+                    deadline = now_ns() + v - ((int64_t)rt.tv_sec * 1000000000 + rt.tv_nsec);
+                } else deadline = v;                               /* absolute, CLOCK_MONOTONIC */
+                if (deadline <= 0) deadline = 1;
+            }
+            t->state = AOI_T_FUTEX;
+            t->futex_addr = addr;
+            t->futex_bitset = op == 9 ? (uint32_t)a5 : ~0u;
+            t->deadline = deadline;
+            c->stop = AOI_STOP_YIELD;
+            r = 0;                                                 /* or ETIMEDOUT, set by the scheduler */
+        } else if (op == 1 || op == 10) {                          /* WAKE / WAKE_BITSET */
+            r = (uint64_t)futex_wake(p, addr, (int)(a2 > 0x7fffffff ? 0x7fffffff : a2), op == 10 ? (uint32_t)a5 : ~0u);
+        } else if (op == 3 || op == 4) {                           /* REQUEUE / CMP_REQUEUE */
+            int i, woken, moved = 0;
+            uint64_t addr2 = a4 & 0x00ffffffffffffffULL;
+            if (op == 4) {
+                if (!get(p, a0, w, 4)) { r = err(L_EFAULT); break; }
+                if (u32(w) != (uint32_t)a5) { r = err(L_EAGAIN); break; }
+            }
+            woken = futex_wake(p, addr, (int)a2, ~0u);
+            for (i = 0; i < AOI_PROC_THREADS && (uint64_t)moved < a3; i++)
+                if (p->th[i].state == AOI_T_FUTEX && p->th[i].futex_addr == addr) { p->th[i].futex_addr = addr2; moved++; }
+            r = (uint64_t)(woken + moved);
+        } else r = err(L_ENOSYS);
+        break;
+    }
+    case NR_rt_sigaction:
+        if (a0 < 1 || a0 > 64) { r = err(L_EINVAL); break; }
+        if (a2 && !put(p, a2, p->sigact[a0], 32)) { r = err(L_EFAULT); break; }
+        if (a1 && (a0 == 9 || a0 == 19)) { r = err(L_EINVAL); break; }
+        if (a1 && !get(p, a1, p->sigact[a0], 32)) { r = err(L_EFAULT); break; }
+        if (a1 && p->trace)
+            fprintf(p->trace, "[sig] sigaction(%d): handler %#llx flags %#llx restorer %#llx\n", (int)a0,
+                    (unsigned long long)p->sigact[a0][0], (unsigned long long)p->sigact[a0][1], (unsigned long long)p->sigact[a0][2]);
+        r = 0;
+        break;
+    case NR_rt_sigreturn:
+        if (!sig_return(p)) { c->stop = AOI_STOP_FAULT; c->fault_addr = c->sp; r = 0; break; }
+        c->stop = AOI_STOP_NEWPC;
+        r = 0;
+        break;
+    case NR_rt_sigprocmask: {
+        uint64_t old = p->th[p->cur].sigmask, set, *m = &p->th[p->cur].sigmask;
+        if (a1) {
+            uint8_t s8[8];
+            if (!get(p, a1, s8, 8)) { r = err(L_EFAULT); break; }
+            set = u64(s8);
+            if (a0 == 0) *m |= set; else if (a0 == 1) *m &= ~set; else if (a0 == 2) *m = set;
+            else { r = err(L_EINVAL); break; }
+            *m &= ~UNBLOCKABLE;
+            if (p->th[p->cur].pending & ~*m) c->stop = AOI_STOP_YIELD;  /* now deliverable: on return */
+        }
+        r = a2 && !put(p, a2, &old, 8) ? err(L_EFAULT) : 0;
+        break;
+    }
+    case NR_sigaltstack:
+        {
+            struct aoi_thread *t = &p->th[p->cur];
+            uint64_t old[3];
+            old[0] = t->altstack[0]; old[2] = t->altstack[2];
+            old[1] = !t->altstack[2] ? 2 : (p->cpu.sp >= t->altstack[0] && p->cpu.sp < t->altstack[0] + t->altstack[2]);
+            if (a1 && !put(p, a1, old, 24)) { r = err(L_EFAULT); break; }
+            if (a0 && !get(p, a0, t->altstack, 24)) { r = err(L_EFAULT); break; }
+            if (a0 && (t->altstack[1] & 2)) t->altstack[2] = 0;           /* SS_DISABLE */
+        }
+        r = 0;
+        break;
+    case NR_kill: case NR_tkill: case NR_tgkill: {
+        int sig = (int)(nr == NR_tgkill ? a2 : a1), i;
+        uint64_t target = nr == NR_tgkill ? a1 : a0;
+        if (sig < 0 || sig > 64) { r = err(L_EINVAL); break; }
+        if (p->linux_mode && (nr == NR_kill || (nr == NR_tgkill && (int)a0 != p->pid))) {
+            r = lx_kill(p, c, nr == NR_kill ? (int64_t)(int32_t)a0 : (int64_t)(int32_t)a0, sig);
+            break;
+        }
+        if (nr == NR_kill && (int64_t)target >= 20000) {          /* a child process */
+            int k = child_find(p, (int64_t)target, 0);
+            if (k < 0) { r = err(L_ESRCH); break; }
+            if (sig && !p->child[k]->done && p->child[k]->proc) p->child[k]->proc->stop_request = 1;
+            r = 0;
+            break;
+        }
+        if (nr == NR_kill) {                                       /* the process: any thread takes it */
+            if (target != GUEST_PID && target != 0 && (int64_t)target != -1) { r = err(L_ESRCH); break; }
+            target = (uint64_t)p->th[p->cur].tid;
+        }
+        for (i = 0; i < AOI_PROC_THREADS; i++)
+            if (p->th[i].state != AOI_T_FREE && p->th[i].tid == (int)target) break;
+        if (i == AOI_PROC_THREADS) { r = err(L_ESRCH); break; }
+        r = 0;
+        if (!sig) break;
+        {
+            struct aoi_thread *t = &p->th[i];                     /* waiting in sigwait for it? */
+            if (t->state == AOI_T_SLEEP && (t->sigwait_mask & SIGBIT(sig))) {
+                uint8_t info[128];
+                memset(info, 0, sizeof info);
+                info[0] = (uint8_t)sig;
+                if (t->sigwait_info) put(p, t->sigwait_info, info, sizeof info);
+                t->sigwait_mask = 0;
+                t->state = AOI_T_RUN;
+                if (i == p->cur) p->cpu.x[0] = (uint64_t)sig; else t->cpu.x[0] = (uint64_t)sig;
+                break;
+            }
+        }
+        if (!sig_send(p, i, sig)) break;                           /* default action: the process ends */
+        if (i == p->cur) c->stop = AOI_STOP_YIELD;                 /* to itself: delivered on return */
+        break;
+    }
+    case NR_prctl:
+        if (a0 == 15) {                                            /* PR_SET_NAME */
+            char n[16];
+            memset(n, 0, sizeof n);
+            if (!gstr(p, a1, n, sizeof n)) n[15] = 0;
+            memcpy(p->th[p->cur].comm, n, 16);
+            p->th[p->cur].comm[15] = 0;
+            r = 0;
+        } else if (a0 == 16) {                                     /* PR_GET_NAME: maplibre's log asks it, */
+            char n[16];                                            /* and logs its failure: endless recursion */
+            const char *e = strrchr(p->exe, '/');
+            memset(n, 0, sizeof n);
+            if (p->th[p->cur].comm[0]) memcpy(n, p->th[p->cur].comm, 16);
+            else {
+                const char *b = e ? e + 1 : p->exe;
+                size_t k = strlen(b);
+                memcpy(n, b, k < 15 ? k : 15);                     /* the kernel's comm: 15 bytes at most */
+            }
+            r = put(p, a1, n, 16) ? 0 : err(L_EFAULT);
+        } else
+            r = (a0 == 0x53564d41 || a0 == 38) ? 0 : a0 == 3 ? 1 : err(L_EINVAL);   /* SET_VMA, NO_NEW_PRIVS */
+        break;
+    case NR_uname: {
+        uint8_t u[390];
+        memset(u, 0, sizeof u);
+        strcpy((char *)u, "Linux"); strcpy((char *)u + 65, "localhost"); strcpy((char *)u + 130, "6.1.0-aoi");
+        strcpy((char *)u + 195, "#1 SMP"); strcpy((char *)u + 260, "aarch64");
+        r = put(p, a0, u, sizeof u) ? 0 : err(L_EFAULT);
+        break;
+    }
+    case NR_clock_gettime: case NR_clock_getres: {
+        struct timespec ts;
+        int64_t t[2];
+        clockid_t id = (a0 == 0 || a0 == 5 || a0 == 8) ? CLOCK_REALTIME : CLOCK_MONOTONIC;
+        if (nr == NR_clock_getres) { ts.tv_sec = 0; ts.tv_nsec = 1; }
+        else if (id == CLOCK_MONOTONIC) { int64_t m = aoi_mono_ns(); ts.tv_sec = m / 1000000000; ts.tv_nsec = m % 1000000000; }
+        else if (det()) { int64_t m = det_ns() + 1700000000000000000ll; ts.tv_sec = m / 1000000000; ts.tv_nsec = m % 1000000000; }
+        else clock_gettime(id, &ts);
+        t[0] = ts.tv_sec; t[1] = ts.tv_nsec;
+        r = !a1 || put(p, a1, t, 16) ? 0 : err(L_EFAULT);
+        break;
+    }
+    case NR_gettimeofday: {
+        struct timeval tv;
+        int64_t t[2];
+        gettimeofday(&tv, NULL);
+        if (det()) { int64_t m = det_ns() + 1700000000000000000ll; tv.tv_sec = m / 1000000000; tv.tv_usec = m % 1000000000 / 1000; }
+        t[0] = tv.tv_sec; t[1] = tv.tv_usec;
+        r = !a0 || put(p, a0, t, 16) ? 0 : err(L_EFAULT);
+        break;
+    }
+    case NR_nanosleep: case NR_clock_nanosleep: {
+        uint8_t s[16];
+        struct timespec ts;
+        if (!get(p, nr == NR_nanosleep ? a0 : a2, s, 16)) { r = err(L_EFAULT); break; }
+        ts.tv_sec = (time_t)u64(s); ts.tv_nsec = (long)u64(s + 8);
+        {
+            struct aoi_thread *t = &p->th[p->cur];
+            int64_t v = (int64_t)ts.tv_sec * 1000000000 + ts.tv_nsec;
+            if (nr == NR_clock_nanosleep && (a1 & 1)) {            /* TIMER_ABSTIME */
+                if (a0 == 0) {
+                    struct timespec rt;
+                    clock_gettime(CLOCK_REALTIME, &rt);
+                    v -= (int64_t)rt.tv_sec * 1000000000 + rt.tv_nsec;
+                } else v -= now_ns();
+            }
+            t->state = AOI_T_SLEEP;
+            t->deadline = now_ns() + (v > 0 ? v : 0) + 1;
+            c->stop = AOI_STOP_YIELD;                              /* others run meanwhile */
+        }
+        r = 0;
+        break;
+    }
+    case NR_sched_getaffinity: {
+        uint64_t one = 1;
+        if (a1 < 8) { r = err(L_EINVAL); break; }
+        r = put(p, a2, &one, 8) ? 8 : err(L_EFAULT);
+        break;
+    }
+    case NR_statfs: case NR_fstatfs: {                              /* every guest file system looks like ext4 */
+        uint64_t sf[15];
+        if (nr == NR_fstatfs && !fd_get(p, a0)) { r = err(L_EBADF); break; }
+        if (nr == NR_statfs) {
+            if ((rc = at_path(p, -100, a0, 1, g))) { r = err(rc); break; }
+            to_host(p, g, h);
+            if (stat(h, &st)) { r = herr(); break; }
+        }
+        memset(sf, 0, sizeof sf);
+        sf[0] = 0xef53; sf[1] = PAGE; sf[2] = sf[3] = sf[4] = 1 << 20; sf[5] = sf[6] = 1 << 20;
+        sf[8] = 255; sf[9] = PAGE;                                 /* f_namelen, f_frsize */
+        r = put(p, a1, sf, 120) ? 0 : err(L_EFAULT);
+        break;
+    }
+    case NR_rt_sigtimedwait: {                                     /* signals are not delivered: wait it out */
+        struct aoi_thread *t = &p->th[p->cur];
+        uint8_t m[8];
+        t->deadline = 0;
+        if (!get(p, a0, m, 8)) { r = err(L_EFAULT); break; }
+        t->sigwait_mask = u64(m);
+        t->sigwait_info = a1;
+        if (a2) {
+            uint8_t ts[16];
+            if (!get(p, a2, ts, 16)) { r = err(L_EFAULT); break; }
+            t->deadline = now_ns() + (int64_t)u64(ts) * 1000000000 + (int64_t)u64(ts + 8) + 1;
+        }
+        t->state = AOI_T_SLEEP;                                    /* deadline 0: until the process ends */
+        c->stop = AOI_STOP_YIELD;
+        r = err(L_EAGAIN);
+        break;
+    }
+    case NR_sched_yield: c->stop = AOI_STOP_YIELD; r = 0; break;
+    case NR_flock:                                                  /* one process: locks always succeed */
+        r = fd_get(p, a0) ? 0 : err(L_EBADF);
+        break;
+    case NR_setpriority: r = 0; break;                              /* accepted; one scheduler for all */
+    case NR_getpriority: r = 20; break;                             /* nice 0, in the kernel's 20-nice form */
+    case NR_sched_getscheduler: r = 0; break;                       /* SCHED_OTHER */
+    case NR_sched_getparam: { uint32_t prio = 0; r = put(p, a1, &prio, 4) ? 0 : err(L_EFAULT); break; }
+    case NR_getrlimit: case NR_prlimit64: {
+        uint64_t res = nr == NR_getrlimit ? a0 : a1, out = nr == NR_getrlimit ? a1 : a3, lim[2];
+        lim[0] = lim[1] = ~0ULL;
+        if (res == 3) lim[0] = STACK_SIZE;                         /* RLIMIT_STACK */
+        if (res == 7) lim[0] = lim[1] = AOI_PROC_FDS;              /* RLIMIT_NOFILE */
+        r = !out || put(p, out, lim, 16) ? 0 : err(L_EFAULT);
+        break;
+    }
+    case NR_sysinfo: {
+        uint8_t si[112];
+        uint64_t total = 8ULL << 30;                             /* report an 8 GB phone */
+        memset(si, 0, sizeof si);
+        memcpy(si + 32, &total, 8); memcpy(si + 40, &total, 8);
+        si[104] = 1;                                               /* mem_unit */
+        r = put(p, a0, si, sizeof si) ? 0 : err(L_EFAULT);
+        break;
+    }
+    case AOI_SYS_GRALLOC:                                          /* guest/mapper.c: buffer references */
+        r = aoi_gralloc_syscall(p, a0, a1);
+        break;
+    case AOI_SYS_GL:                                               /* guest/gles.c: OpenGL ES (core/gpu.h) */
+        r = p->gpu ? p->gpu(p->gpu_ctx, p, a0, a1) : err(L_ENOSYS);
+        if (p->snap_gpu_free && !p->gpu_live) {                    /* the last of it gone: the snapshot */
+            p->snap_gpu_free = 0;                                  /* now, before any thread draws again */
+            p->snap_request = 1;
+            c->stop = AOI_STOP_YIELD;
+        }
+        break;
+    case NR_getrandom: {
+        int u;
+        if (det()) {
+            uint8_t b[4096];
+            uint64_t done = 0, n;
+            while (done < a1) {
+                n = a1 - done < sizeof b ? a1 - done : sizeof b;
+                det_fill(b, n);
+                if (!put(p, a0 + done, b, n)) break;
+                done += n;
+            }
+            r = done ? done : err(L_EFAULT);
+            break;
+        }
+        u = open("/dev/urandom", O_RDONLY | O_CLOEXEC);
+        int64_t k = u < 0 ? -L_EIO : xfer(p, u, a0, a1, 1, -1);
+        if (u >= 0) close(u);
+        r = (uint64_t)k;
+        break;
+    }
+    case 69: case 70: {                                            /* preadv, pwritev: at an offset */
+        uint64_t i, total = 0;
+        if (!(f = fd_get(p, a0))) { r = err(L_EBADF); break; }
+        if (f->kind != AOI_FD_FILE) { r = err(L_ESPIPE); break; }
+        r = 0;
+        for (i = 0; i < a2 && i < 1024; i++) {
+            uint8_t e[16];
+            uint64_t len;
+            int64_t k;
+            if (!get(p, a1 + i * 16, e, 16)) { r = err(L_EFAULT); break; }
+            if (!(len = u64(e + 8))) continue;
+            k = xfer(p, f->host, u64(e), len, nr == 69, (int64_t)(a3 + total));
+            if (k < 0) { r = total ? total : (uint64_t)k; break; }
+            r = total += (uint64_t)k;
+            if ((uint64_t)k < len) break;
+        }
+        break;
+    }
+    case 71: {                                                     /* sendfile(out, in, offset*, count) */
+        struct aoi_proc_fd *in = fd_get(p, a1), *out = fd_get(p, a0);
+        uint8_t buf[65536];
+        uint64_t total = 0, off = 0;
+        int ok = 1;
+        if (!in || !out) { r = err(L_EBADF); break; }
+        if (in->kind != AOI_FD_FILE) { r = err(L_EINVAL); break; }
+        if (a2 && !get(p, a2, &off, 8)) { r = err(L_EFAULT); break; }
+        while (total < a3) {
+            size_t want = a3 - total < sizeof buf ? (size_t)(a3 - total) : sizeof buf;
+            ssize_t n = a2 ? pread(in->host, buf, want, (off_t)(off + total)) : read(in->host, buf, want), w = 0;
+            if (n < 0) { ok = 0; r = herr(); break; }
+            if (n == 0) break;
+            while (w < n) {
+                ssize_t k = write(out->host, buf + w, (size_t)(n - w));
+                if (k < 0) break;
+                w += k;
+            }
+            total += (uint64_t)w;
+            if (w < n) { if (!a2) lseek(in->host, (off_t)(w - n), SEEK_CUR); if (!total) { ok = 0; r = herr(); } break; }
+        }
+        if (!ok) break;
+        if (a2) { off += total; put(p, a2, &off, 8); }
+        r = total;
+        break;
+    }
+    case 50:                                                       /* fchdir */
+        if (!(f = fd_get(p, a0))) { r = err(L_EBADF); break; }
+        if (fstat(f->host, &st) || !S_ISDIR(st.st_mode)) { r = err(L_ENOTDIR); break; }
+        snprintf(p->cwd, sizeof p->cwd, "%s", f->path);
+        r = 0;
+        break;
+    case 95: case 260: {                                           /* waitid, wait4: our child processes */
+        int64_t pid = nr == 260 ? (int64_t)(int32_t)a0 : (a0 == 1 ? (int64_t)(int32_t)a1 : -1);   /* P_PID, else any */
+        uint64_t opts = nr == 260 ? a2 : a3;
+        int i = child_find(p, pid <= 0 ? -1 : pid, 1);
+        if (i == -2) { r = err(L_ECHILD); break; }
+        if (i < 0) { r = (opts & 1) ? 0 : block_and_retry(p, 10000000); break; }   /* WNOHANG, else wait */
+        {
+            struct aoi_child *ch = p->child[i];
+            int32_t st = ch->status, cpid = ch->pid;
+            if (nr == 260) {
+                if (a1 && !put(p, a1, &st, 4)) { r = err(L_EFAULT); break; }
+                if (a3) {                                          /* rusage: not counted per child */
+                    uint8_t ru[144];
+                    memset(ru, 0, sizeof ru);
+                    if (!put(p, a3, ru, sizeof ru)) { r = err(L_EFAULT); break; }
+                }
+                r = (uint64_t)cpid;
+            } else {
+                uint8_t si[128];
+                int32_t v;
+                memset(si, 0, sizeof si);
+                v = 17; memcpy(si, &v, 4);                         /* SIGCHLD */
+                v = (st & 0x7f) ? 2 : 1; memcpy(si + 8, &v, 4);    /* CLD_KILLED / CLD_EXITED */
+                memcpy(si + 16, &cpid, 4);
+                memcpy(si + 20, &p->uid, 4);
+                v = (st & 0x7f) ? (st & 0x7f) : (st >> 8) & 0xff; memcpy(si + 24, &v, 4);
+                if (a2 && !put(p, a2, si, sizeof si)) { r = err(L_EFAULT); break; }
+                r = 0;
+            }
+            if (!(nr == 95 && (opts & 0x01000000))) { free(ch); p->child[i] = NULL; }   /* (WNOWAIT keeps it) */
+        }
+        break;
+    }
+    case 153: {                                                    /* times: no CPU accounting; the clock in ticks */
+        uint8_t tms[32];
+        memset(tms, 0, sizeof tms);
+        if (a0 && !put(p, a0, tms, sizeof tms)) { r = err(L_EFAULT); break; }
+        r = (uint64_t)(now_ns() / 10000000);
+        break;
+    }
+    case 72:                                                       /* pselect6 */
+        r = sys_pselect(p, a0, a1, a2, a3, a4);
+        break;
+    case 158: {                                                    /* getgroups: just the process's group */
+        uint32_t gid = p->linux_mode ? p->cred[4] : p->uid;
+        if ((int32_t)a0 < 0) { r = err(L_EINVAL); break; }
+        r = a0 == 0 ? 1 : put(p, a1, &gid, 4) ? 1 : err(L_EFAULT);
+        break;
+    }
+    case 159: r = 0; break;                                        /* setgroups: accepted */
+    case 133: {                                                    /* rt_sigsuspend(mask, size) */
+        struct aoi_thread *t = &p->th[p->cur];
+        uint64_t m;
+        if (!get(p, a0, &m, 8)) { r = err(L_EFAULT); break; }
+        m &= ~UNBLOCKABLE;
+        if (t->pending & ~m) {                                     /* a signal it lets through: its handler runs, */
+            if (!t->susp) { t->susp_old = t->sigmask; t->susp = 1; }   /* then the old mask comes back */
+            t->sigmask = m;
+            c->stop = AOI_STOP_YIELD;
+            r = err(L_EINTR);
+            break;
+        }
+        r = block_and_retry(p, 10000000);                          /* (lx_take and kill set pending meanwhile) */
+        break;
+    }
+    case 136: {                                                    /* rt_sigpending: nothing pending */
+        uint64_t z = 0;
+        r = put(p, a0, &z, a1 < 8 ? a1 : 8) ? 0 : err(L_EFAULT);
+        break;
+    }
+    case 26: {                                                     /* inotify_init1: watches that never fire */
+        int d, n;                                                  /* (FileObserver, Chromium: they work without) */
+        if ((d = open("/dev/null", O_RDWR | O_CLOEXEC)) < 0) { r = herr(); break; }
+        if ((n = fd_new(p, d, "anon_inode:inotify", 0)) < 0) { close(d); r = err(L_EMFILE); break; }
+        p->fd[n].kind = AOI_FD_EVENTFD;                            /* a counter at 0: never readable */
+        p->fd[n].count = 0;
+        p->fd[n].nonblock = (a0 & 04000) != 0;
+        r = (uint64_t)n;
+        break;
+    }
+    case 27:                                                       /* inotify_add_watch: a watch descriptor */
+        r = fd_get(p, a0) ? (uint64_t)++p->inotify_wd : err(L_EBADF);
+        break;
+    case 28:                                                       /* inotify_rm_watch */
+        r = fd_get(p, a0) ? 0 : err(L_EBADF);
+        break;
+    case 107: {                                                    /* timer_create: POSIX timers that never fire */
+        uint32_t id = ++p->posix_timers;                           /* (libmedia's Watchdog: a timeout that would */
+        r = put(p, a2, &id, 4) ? 0 : err(L_EFAULT);                /* abort a hung call) */
+        break;
+    }
+    case 108: {                                                    /* timer_gettime: disarmed */
+        uint8_t z[32] = { 0 };
+        r = put(p, a1, z, sizeof z) ? 0 : err(L_EFAULT);
+        break;
+    }
+    case 109: case 111: r = 0; break;                              /* timer_getoverrun, timer_delete */
+    case 110:                                                      /* timer_settime(id, flags, new, old) */
+        if (a3) { uint8_t z[32] = { 0 }; if (!put(p, a3, z, sizeof z)) { r = err(L_EFAULT); break; } }
+        r = 0;
+        break;
+    case 164:                                                      /* setrlimit: the limits stay the host's */
+    case 223:                                                      /* fadvise64: a hint */
+    case 81: case 84: case 267:                                    /* sync, sync_file_range, syncfs */
+    case 118: case 119: case 122:                                  /* sched_setparam/setscheduler/setaffinity */
+        r = 0;
+        break;
+    case 125: case 126:                                            /* sched_get_priority_max/min */
+        r = (a0 == 1 || a0 == 2) ? (nr == 125 ? 99 : 1) : 0;      /* SCHED_FIFO, SCHED_RR: 1..99; others 0 */
+        break;
+    case 168: {                                                    /* getcpu(cpu, node): one CPU */
+        uint32_t z = 0;
+        r = (a0 && !put(p, a0, &z, 4)) || (a1 && !put(p, a1, &z, 4)) ? err(L_EFAULT) : 0;
+        break;
+    }
+    case 165: {                                                    /* getrusage: the process's CPU time */
+        uint8_t ru[144];
+        struct timespec ts;
+        int64_t tv[2];
+        memset(ru, 0, sizeof ru);
+        clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &ts);
+        tv[0] = ts.tv_sec; tv[1] = ts.tv_nsec / 1000;
+        memcpy(ru, tv, sizeof tv);                                 /* ru_utime; ru_stime 0 */
+        r = put(p, a1, ru, sizeof ru) ? 0 : err(L_EFAULT);
+        break;
+    }
+    default:
+        if (nr < sizeof p->unknown * 8 && !(p->unknown[nr / 8] & (1 << (nr % 8)))) {
+            p->unknown[nr / 8] |= (unsigned char)(1 << (nr % 8));
+            if (!p->linux_mode || p->log || p->trace)                  /* (not into a Linux terminal) */
+                fprintf(p->linux_mode && p->trace ? p->trace : stderr, "[aoiproc] syscall %llu not implemented (ENOSYS), pc=%#llx\n",
+                        (unsigned long long)nr, (unsigned long long)c->pc);
+        }
+        r = err(L_ENOSYS);
+        break;
+    }
+    if ((int64_t)r >= 0 && c->stop == AOI_RUN) note_cloexec(p, nr, a0, a1, a2, a3, r);
+    if (c->stop != AOI_STOP_RESTART) trace_sys(p, nr, r);       /* a blocked retry is not a result */
+    return r;
+}

@@ -1,0 +1,4 @@
+build/
+xt/
+*.tar.gz
+*.ipa
