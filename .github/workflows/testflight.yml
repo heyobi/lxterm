@@ -1,11 +1,11 @@
-# LxTerm → TestFlight: roots (arm64 Linux), App Store Connect checks, then a signed
-# build on macOS uploaded with altool. Same secrets and helper as the other heyobi apps.
+# LxTerm → TestFlight: the Debian root (arm64 Linux, apt in our interpreter), App Store
+# Connect checks, then the SwiftUI app archived with Xcode 27 and uploaded.
 name: iOS → TestFlight
 
 on:
   push:
     branches: [main]
-    paths-ignore: ['**.md', 'docs/**', '.gitignore']
+    paths-ignore: ['**.md', 'docs/**', 'store/**', 'scripts/icon.py', '.github/workflows/ci.yml', '.gitignore']
   workflow_dispatch:
 
 concurrency:
@@ -26,7 +26,7 @@ jobs:
       - run: sudo apt-get update -qq && sudo apt-get install -y -qq clang bc > /dev/null
       - run: sh scripts/make-roots.sh
       - uses: actions/upload-artifact@v4
-        with: { name: rootfs, path: 'rootfs-*.tar.gz', retention-days: 7 }
+        with: { name: rootfs, path: rootfs-debian.tar.gz, retention-days: 7 }
 
   prepare:
     runs-on: ubuntu-latest
@@ -41,15 +41,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
-      - name: Check required secrets
-        env:
-          C: ${{ secrets.BUILD_CERTIFICATE_BASE64 }}
-          P: ${{ secrets.P12_PASSWORD }}
-          K: ${{ secrets.KEYCHAIN_PASSWORD }}
-        run: |
-          missing=""
-          for v in ASC_KEY_ID ASC_ISSUER_ID ASC_PRIVATE_KEY C P K; do eval "x=\${$v:-}"; [ -n "$x" ] || missing="$missing $v"; done
-          if [ -n "$missing" ]; then echo "::error::Missing repository secrets:$missing"; exit 1; fi
       - name: Ensure bundle ID and app record
         id: app
         run: node scripts/asc.cjs ensure-app
@@ -59,7 +50,7 @@ jobs:
 
   build:
     needs: [roots, prepare]
-    runs-on: macos-26
+    runs-on: xcode-27
     timeout-minutes: 45
     env:
       ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
@@ -72,12 +63,11 @@ jobs:
         with: { node-version: 22 }
       - uses: actions/download-artifact@v4
         with: { name: rootfs }
-      - name: xterm.js (MIT, npm; integrity checked by npm)
+      - name: Licenses and Xcode project
         run: |
-          mkdir -p xt && cd xt && npm pack --silent @xterm/xterm@5.5.0 @xterm/addon-fit@0.10.0
-          for t in *.tgz; do mkdir -p "${t%.tgz}" && tar -xzf "$t" -C "${t%.tgz}"; done
-      - name: Build
-        run: sh scripts/build-app.sh dev build/Payload/LxTerm.app "$BUILD_NUMBER"
+          mkdir -p licenses && cp LICENSE NOTICE.md licenses/
+          curl -fsSL https://raw.githubusercontent.com/migueldeicaza/SwiftTerm/main/LICENSE -o licenses/SwiftTerm-LICENSE.txt
+          brew install xcodegen && xcodegen generate
 
       - name: Install Apple Distribution certificate
         id: cert
@@ -109,21 +99,37 @@ jobs:
         id: profile
         run: node scripts/asc.cjs profile "${{ steps.cert.outputs.serial }}" "$PROFILE_NAME"
 
-      - name: Sign
+      - name: Archive
         env:
-          PROFILE_UUID: ${{ steps.profile.outputs.profile_uuid }}
+          PROFILE: ${{ steps.profile.outputs.profile_name }}
         run: |
-          set -eu
-          APP=build/Payload/LxTerm.app
-          PROF="$HOME/Library/MobileDevice/Provisioning Profiles/$PROFILE_UUID.mobileprovision"
-          cp "$PROF" "$APP/embedded.mobileprovision"
-          security cms -D -i "$PROF" > "$RUNNER_TEMP/prof.plist"
-          /usr/libexec/PlistBuddy -x -c "Print :Entitlements" "$RUNNER_TEMP/prof.plist" > "$RUNNER_TEMP/ent.plist"
-          cat "$RUNNER_TEMP/ent.plist"
-          codesign --force --sign "Apple Distribution" --entitlements "$RUNNER_TEMP/ent.plist" --generate-entitlement-der "$APP"
-          codesign --verify --deep --strict "$APP"
-          (cd build && zip -qry LxTerm.ipa Payload)
-          ls -lh build/LxTerm.ipa
+          set -o pipefail
+          xcodebuild -version
+          xcodebuild archive -project LxTerm.xcodeproj -scheme LxTerm -configuration Release \
+            -destination 'generic/platform=iOS' -archivePath build/LxTerm.xcarchive \
+            CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM="$TEAM_ID" CODE_SIGN_IDENTITY="Apple Distribution" \
+            PROVISIONING_PROFILE_SPECIFIER="$PROFILE" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" > archive.log 2>&1 \
+            || { grep -E "error:|warning: .*SwiftTerm" archive.log | head -n 60; tail -n 40 archive.log; exit 1; }
+          tail -n 5 archive.log
+
+      - name: Export signed IPA
+        env:
+          PROFILE: ${{ steps.profile.outputs.profile_name }}
+        run: |
+          set -o pipefail
+          cat > build/ExportOptions.plist <<EOF
+          <?xml version="1.0" encoding="UTF-8"?>
+          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+          <plist version="1.0"><dict>
+            <key>method</key><string>app-store-connect</string>
+            <key>teamID</key><string>$TEAM_ID</string>
+            <key>signingStyle</key><string>manual</string>
+            <key>provisioningProfiles</key><dict><key>$BUNDLE_ID</key><string>$PROFILE</string></dict>
+            <key>uploadSymbols</key><false/>
+          </dict></plist>
+          EOF
+          xcodebuild -exportArchive -archivePath build/LxTerm.xcarchive -exportOptionsPlist build/ExportOptions.plist -exportPath build/ipa | tail -n 40
+          ls -lh build/ipa/
 
       - name: Upload to App Store Connect (TestFlight)
         run: |
@@ -135,7 +141,8 @@ jobs:
             fs.mkdirSync(d, { recursive: true });
             fs.writeFileSync(path.join(d, 'AuthKey_' + process.env.ASC_KEY_ID + '.p8'), raw);
           "
-          xcrun altool --upload-app -f build/LxTerm.ipa -t ios --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID" --show-progress
+          IPA=$(find build/ipa -name "*.ipa" | head -n 1)
+          xcrun altool --upload-app -f "$IPA" -t ios --apiKey "$ASC_KEY_ID" --apiIssuer "$ASC_ISSUER_ID" --show-progress
           echo "### Build $BUILD_NUMBER uploaded to App Store Connect" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Clean up keychain and key

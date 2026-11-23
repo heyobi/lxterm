@@ -1,11 +1,10 @@
-# Checks on every push: the Linux userland on the host (Alpine and Debian, unmodified,
-# in build/lxrun on an arm64 runner), then the app in the iOS simulator (screenshots
-# and Documents/measure-*.txt as an artifact).
+# Builds the app for the simulator with Xcode 27 and runs it there: screenshots of the
+# first launch (Debian unpacking, the shell). The Linux userland itself is tested in the
+# core's repository (heyobi/apk-on-iphone, branch linux-userland).
 name: CI
 
 on:
-  push:
-    paths-ignore: ['**.md', 'docs/**', '.gitignore']
+  pull_request:
   workflow_dispatch:
 
 concurrency:
@@ -13,30 +12,6 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  alpine:
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 40
-    steps:
-      - uses: actions/checkout@v4
-      - run: sudo apt-get update -qq && sudo apt-get install -y -qq clang bc > /dev/null
-      - run: make build/lxrun
-      - run: sh tests/linux/fetch-alpine.sh "$RUNNER_TEMP/alpine"
-      - run: sh tests/linux/run_alpine.sh "$RUNNER_TEMP/alpine" net
-      - run: sh tests/linux/bench.sh "$RUNNER_TEMP/alpine"
-
-  debian:
-    runs-on: ubuntu-24.04-arm
-    timeout-minutes: 75
-    steps:
-      - uses: actions/checkout@v4
-      - run: sudo apt-get update -qq && sudo apt-get install -y -qq clang bc > /dev/null
-      - run: make build/lxrun
-      - run: sh tests/linux/fetch-debian.sh "$RUNNER_TEMP/debian"
-      - run: sh tests/linux/run_debian.sh "$RUNNER_TEMP/debian" net
-      - uses: actions/upload-artifact@v4
-        if: failure()
-        with: { name: debian-traces, path: /tmp/lx-traces, retention-days: 5 }
-
   roots:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
@@ -45,50 +20,36 @@ jobs:
       - run: sudo apt-get update -qq && sudo apt-get install -y -qq clang bc > /dev/null
       - run: sh scripts/make-roots.sh
       - uses: actions/upload-artifact@v4
-        with: { name: rootfs, path: 'rootfs-*.tar.gz', retention-days: 3 }
+        with: { name: rootfs, path: rootfs-debian.tar.gz, retention-days: 3 }
 
   simulator:
     needs: roots
-    runs-on: macos-15
+    runs-on: xcode-27
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with: { name: rootfs }
-      - name: xterm.js
-        run: |
-          mkdir -p xt && cd xt && npm pack --silent @xterm/xterm@5.5.0 @xterm/addon-fit@0.10.0
-          for t in *.tgz; do mkdir -p "${t%.tgz}" && tar -xzf "$t" -C "${t%.tgz}"; done
       - name: Build for the simulator
         run: |
-          sh scripts/build-app.sh sim build/sim/LxTerm.app
-          codesign --force --sign - --timestamp=none build/sim/LxTerm.app
-      - name: Run in the simulator
+          set -o pipefail
+          mkdir -p licenses && cp LICENSE NOTICE.md licenses/
+          brew install xcodegen && xcodegen generate
+          xcodebuild build -project LxTerm.xcodeproj -scheme LxTerm -configuration Debug -sdk iphonesimulator \
+            -destination 'generic/platform=iOS Simulator' -derivedDataPath build/dd CODE_SIGNING_ALLOWED=NO > build.log 2>&1 \
+            || { grep -E "error:" build.log | head -n 60; tail -n 30 build.log; exit 1; }
+      - name: Run and take screenshots
         run: |
           set -eu
-          UDID=$(xcrun simctl list devices available -j | python3 -c '
-          import json,sys
-          d=json.load(sys.stdin)["devices"]
-          c=[x for k,v in d.items() if "iOS" in k for x in v if x["name"].startswith("iPhone")]
-          c.sort(key=lambda x: ("Pro" not in x["name"], x["name"]))
-          print(c[0]["udid"])')
-          xcrun simctl boot "$UDID"; xcrun simctl bootstatus "$UDID" -b > /dev/null
-          xcrun simctl install "$UDID" build/sim/LxTerm.app
+          UDID=$(bash scripts/sim-device.sh "iPhone 17 Pro")
+          xcrun simctl boot "$UDID" || true; xcrun simctl bootstatus "$UDID" -b > /dev/null
+          APP=$(find build/dd -name LxTerm.app -path '*iphonesimulator*' | head -n 1)
+          xcrun simctl install "$UDID" "$APP"
           mkdir -p shots
-          xcrun simctl launch "$UDID" com.heyobi.lxterm; sleep 6
-          xcrun simctl io "$UDID" screenshot shots/0-chooser.png
-          xcrun simctl terminate "$UDID" com.heyobi.lxterm || true
-          for d in alpine debian; do
-            xcrun simctl launch "$UDID" com.heyobi.lxterm -distro $d -measure; sleep 150
-            xcrun simctl io "$UDID" screenshot shots/1-$d-session.png
-            xcrun simctl terminate "$UDID" com.heyobi.lxterm || true; sleep 2
-            xcrun simctl launch "$UDID" com.heyobi.lxterm -distro $d -resume; sleep 12
-            xcrun simctl io "$UDID" screenshot shots/2-$d-resumed.png
-            xcrun simctl terminate "$UDID" com.heyobi.lxterm || true; sleep 2
-          done
-          C=$(xcrun simctl get_app_container "$UDID" com.heyobi.lxterm data)
-          cp "$C"/Documents/measure-*.txt shots/ 2>/dev/null || true
-          cat shots/measure-*.txt || true
+          xcrun simctl launch "$UDID" com.heyobi.lxterm; sleep 3
+          xcrun simctl io "$UDID" screenshot shots/1-unpacking.png
+          sleep 40
+          xcrun simctl io "$UDID" screenshot shots/2-shell.png
       - uses: actions/upload-artifact@v4
         if: always()
         with: { name: simulator, path: shots }

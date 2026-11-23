@@ -67,7 +67,16 @@ static void pax(const char *b, size_t n, char *path, char *link, size_t cap)
 
 const char *aoi_untar_gz(const char *archive, const char *dest, unsigned long *nfiles)
 {
+    return aoi_untar_gz_progress(archive, dest, nfiles, NULL, NULL);
+}
+
+const char *aoi_untar_gz_progress(const char *archive, const char *dest, unsigned long *nfiles,
+                                  void (*progress)(void *ctx, double f), void *ctx)
+{
     gzFile g = gzopen(archive, "rb");
+    struct stat ast;
+    double total = !stat(archive, &ast) && ast.st_size > 0 ? (double)ast.st_size : 1.0;
+    unsigned long entries = 0;
     char h[512], longname[4096] = "", longlink[4096] = "", name[4096], lnk[4096], out[8192], lout[8192];
     static char buf[1 << 16];
     unsigned long count = 0;
@@ -80,6 +89,7 @@ const char *aoi_untar_gz(const char *archive, const char *dest, unsigned long *n
         char type;
         if (!readn(g, h, 512)) break;
         if (!h[0]) break;                                          /* end of archive */
+        if (progress && !(++entries % 64)) progress(ctx, (double)gzoffset(g) / total);
         size = oct(h + 124, 12);
         mode = (unsigned)oct(h + 100, 8) & 07777;
         type = h[156];

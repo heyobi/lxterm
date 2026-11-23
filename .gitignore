@@ -2,3 +2,5 @@ build/
 xt/
 *.tar.gz
 *.ipa
+LxTerm.xcodeproj/
+licenses/
