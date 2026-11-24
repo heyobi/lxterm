@@ -40,6 +40,12 @@ enum Tour {
         return t.hasSuffix("# ") || t.hasSuffix(">>> ")
     }
 
+    private static func hideKeyboard(_ s: Session) {
+        _ = s.view.resignFirstResponder()
+        s.view.window?.endEditing(true)
+        UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
+    }
+
     static func run(_ store: Store) {
         let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("shots")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
@@ -50,13 +56,14 @@ enum Tour {
             NotificationCenter.default.post(name: .lxFontChanged, object: nil)
             var waited = 0
             while !atPrompt(s) && waited < 120 { try? await Task.sleep(nanoseconds: 500_000_000); waited += 1 }
-            _ = s.view.resignFirstResponder()
+            hideKeyboard(s)
             for scene in scenes {
                 if let t = scene.theme {
                     UserDefaults.standard.set(t, forKey: "theme")
                     NotificationCenter.default.post(name: .lxFontChanged, object: nil)
                 }
-                if scene.keyboard { _ = s.view.becomeFirstResponder() } else { UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil) }
+                try? await Task.sleep(nanoseconds: 300_000_000)
+                if scene.keyboard { _ = s.view.becomeFirstResponder() } else { hideKeyboard(s) }
                 for (keys, wait) in scene.steps {
                     for ch in keys.utf8 { s.sendKeys([ch]); try? await Task.sleep(nanoseconds: 20_000_000) }
                     try? await Task.sleep(nanoseconds: 300_000_000)
@@ -70,6 +77,7 @@ enum Tour {
                     }
                 }
                 guard let name = scene.name else { continue }
+                if !scene.keyboard { hideKeyboard(s); try? await Task.sleep(nanoseconds: 900_000_000) }
                 try? name.write(to: dir.appendingPathComponent("ready"), atomically: true, encoding: .utf8)
                 let asked = Date()
                 while (try? String(contentsOf: dir.appendingPathComponent("next"), encoding: .utf8)) != name,
