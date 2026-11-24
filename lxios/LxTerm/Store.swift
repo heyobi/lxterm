@@ -63,6 +63,7 @@ final class Store: ObservableObject {
         if sessions.isEmpty { sessions = [Session()] }
         selected = min(UserDefaults.standard.integer(forKey: "selected"), sessions.count - 1)
         persist()
+        if ProcessInfo.processInfo.arguments.contains("-shots") { Tour.run(self) }
     }
 
     func newSession() {

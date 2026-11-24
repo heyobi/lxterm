@@ -13,6 +13,7 @@ final class Session: NSObject, ObservableObject, Identifiable, TerminalViewDeleg
     private(set) var resumed = false
     private var size: (cols: Int, rows: Int)?    // the view's last size: sent again once the shell runs
     var ctrlArmed = false                         // the key bar's Ctrl: applies to the next key
+    var lastOutput = Date()                       // when the shell last wrote (screenshot tour)
     private weak var keyBar: KeyBar?
     lazy var view: TerminalView = makeView()
 
@@ -130,6 +131,7 @@ final class Session: NSObject, ObservableObject, Identifiable, TerminalViewDeleg
     private func output(_ p: UnsafeRawPointer, _ n: Int) {
         let bytes = UnsafeRawBufferPointer(start: p, count: n)
         lock.lock()
+        lastOutput = Date()
         pending.append(contentsOf: bytes)
         history.append(contentsOf: bytes)
         if history.count > Session.historyMax + 64 * 1024 { history.removeFirst(history.count - Session.historyMax) }
