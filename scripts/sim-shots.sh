@@ -10,6 +10,12 @@ BUNDLE=com.heyobi.lxterm
 mkdir -p "$OUT"
 DEV=$(bash scripts/sim-device.sh "$NAME_DEV")
 echo "simulator $NAME_DEV $DEV"
+# no "slide to type" introduction over the keyboard: set before the device boots
+P="$HOME/Library/Developer/CoreSimulator/Devices/$DEV/data/Library/Preferences/com.apple.Preferences"
+xcrun simctl shutdown "$DEV" 2>/dev/null || true
+mkdir -p "$(dirname "$P")"
+defaults write "$P" DidShowContinuousPathIntroduction -bool true
+defaults write "$P" KeyboardContinuousPathEnabled -bool false
 xcrun simctl boot "$DEV" || true
 xcrun simctl bootstatus "$DEV" -b > /dev/null
 xcrun simctl status_bar "$DEV" override --time "9:41" --dataNetwork wifi --wifiMode active --wifiBars 3 \

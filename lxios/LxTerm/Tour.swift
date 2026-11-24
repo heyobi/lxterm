@@ -16,6 +16,8 @@ enum Tour {
     }
 
     private static let scenes: [Scene] = [
+        // fastfetch with Debian's small logo and no host-dependent lines (the simulator's disk and memory)
+        Scene(name: nil, steps: [("mkdir -p ~/.config/fastfetch && echo '{\"logo\":{\"source\":\"debian_small\"},\"modules\":[\"title\",\"separator\",\"os\",\"kernel\",\"packages\",\"shell\",\"terminal\",\"cpu\",\"locale\",\"break\",\"colors\"]}' > ~/.config/fastfetch/config.jsonc\r", .prompt)]),
         Scene(name: "fetch", steps: [("clear\r", .prompt), ("fastfetch\r", .prompt)]),
         Scene(name: "python", steps: [("clear\r", .prompt), ("python3\r", .prompt),
                                       ("import statistics, platform\r", .prompt),
@@ -24,10 +26,10 @@ enum Tour {
                                       ("statistics.mean(data), sorted(data)\r", .prompt),
                                       ("{w: len(w) for w in 'apt pip ssh tmux'.split()}\r", .prompt)]),
         Scene(name: nil, steps: [("exit()\r", .prompt), ("clear\r", .prompt)]),
-        Scene(name: "tmux", steps: [("tmux new-session \\; split-window -v top \\; select-pane -t 0\r", .seconds(8)),
-                                    ("ls -l --color=always /usr/bin | head -n 8\r", .seconds(4))]),
+        Scene(name: "tmux", steps: [("tmux new-session \\; split-window -v 'nano /etc/os-release' \\; select-pane -t 0\r", .seconds(8)),
+                                    ("uname -sm; python3 --version; tmux -V\r", .seconds(4))]),
         Scene(name: nil, steps: [("tmux kill-server\r", .seconds(4)), ("clear\r", .prompt)]),
-        Scene(name: "keys", steps: [("uname -sm; nproc; head -n 3 /proc/meminfo\r", .prompt)], keyboard: true),
+        Scene(name: "keys", steps: [("id; echo $SHELL; uname -sm\r", .prompt)], keyboard: true),
         Scene(name: "theme", steps: [("clear\r", .prompt), ("ls -la --color=always /\r", .prompt)], theme: "solarized"),
     ]
 
@@ -43,6 +45,9 @@ enum Tour {
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         Task { @MainActor in
             guard let s = store.current else { return }
+            // a font that fits fastfetch's two columns on a phone
+            Settings.fontSize = UIDevice.current.userInterfaceIdiom == .phone ? 10 : 15
+            NotificationCenter.default.post(name: .lxFontChanged, object: nil)
             var waited = 0
             while !atPrompt(s) && waited < 120 { try? await Task.sleep(nanoseconds: 500_000_000); waited += 1 }
             _ = s.view.resignFirstResponder()
