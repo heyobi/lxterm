@@ -1,22 +1,35 @@
-# LxTerm
-
-**Debian on a non-jailbroken iPhone.** Debian 13's own arm64 programs (glibc, bash,
-`dpkg`, `apt`, python, git, ssh, tmux) run unmodified on the phone itself, in a no-JIT AArch64 interpreter with an in-process Linux system-call layer:
-real `fork`/`execve`, pipes, signals and job control, a terminal with Linux's line
-discipline, and snapshots that bring a shell back in a fraction of a second.
-
-Not an emulated PC (iSH emulates 32-bit x86) and not a set of ported commands
-(a-Shell): the distributions' own arm64 binaries, from their own images and mirrors.
-
-<p>
-<img src="docs/screenshots/sim-debian-shell.jpg" width="300" alt="Debian 13 in LxTerm (iOS simulator)">
-<img src="docs/screenshots/sim-lxterm-resumed.jpg" width="180" alt="A shell resumed from its snapshot (first version)">
+<p align="center"><img src="docs/icon.png" width="112" alt="LxTerm icon"></p>
+<h1 align="center">LxTerm: real Linux on iPhone</h1>
+<p align="center"><b>Debian 13 runs unmodified on a normal, non-jailbroken iPhone and iPad.</b><br>
+apt, bash, Python 3 and pip, git, SSH, tmux and nano, in a native terminal app. Offline, free, open source.</p>
+<p align="center"><a href="https://apps.apple.com/app/id6838355342"><img src="docs/app-store-badge.svg" height="48" alt="Download LxTerm on the App Store"></a></p>
+<p align="center">
+<img src="docs/screens/iphone-1-fetch.jpg" width="160" alt="fastfetch in Debian 13 on iPhone">
+<img src="docs/screens/iphone-2-python.jpg" width="160" alt="Python 3">
+<img src="docs/screens/iphone-3-tmux.jpg" width="160" alt="tmux with nano">
+<img src="docs/screens/iphone-4-keys.jpg" width="160" alt="The key row: Esc, Ctrl, Tab, arrows">
+<img src="docs/screens/iphone-5-theme.jpg" width="160" alt="Themes">
 </p>
 
-Status: **TestFlight beta.** What works: apt/dpkg with maintainer scripts, python3, git
-(https), ssh, tmux, job control (Ctrl-Z, fg, bg), ps/top, several tabs, sessions that
-come back after the app is closed. Not there: graphical programs, systemd services,
-Docker; everything runs in an interpreter, so heavy computing is slow.
+Website: https://heyobi.github.io/lxterm/ · Status: **submitted to the App Store** (in review, November 2026).
+
+## Questions
+
+**Can I run Linux on an iPhone without a jailbreak?** Yes. LxTerm runs Debian 13 for arm64 on the phone itself: Debian's own programs (glibc, bash, coreutils, dpkg, apt), unmodified, in a no-JIT AArch64 interpreter with an in-process Linux system-call layer. No jailbreak, no sideloading, no cloud machine.
+
+**How do I use apt on my iPhone?** Type `apt update`, then `apt install <package>`, for example `apt install htop`. Packages come from Debian's own mirrors, maintainer scripts included.
+
+**Can I run Python and pip on iPhone?** Yes. Python 3 is installed; `apt install python3-pip` adds pip, and pip installs Linux packages from PyPI, including compiled ones such as polars.
+
+**SSH and tmux?** tmux is installed; `apt install openssh-client` adds ssh. Ctrl-C, Ctrl-Z, `fg` and `bg` work as on Linux.
+
+**How is it different from iSH and a-Shell?** iSH emulates a 32-bit x86 PC (Alpine); a-Shell offers commands ported to iOS. LxTerm runs the distribution's own 64-bit ARM binaries, from Debian's images and mirrors.
+
+**Is it fast?** Everything runs in an interpreter (iOS allows no JIT): shell work, editors, git and Python are comfortable, heavy computing is slow. A WebAssembly-based accelerator is being prototyped in the core.
+
+What works: apt/dpkg with maintainer scripts, python3 and pip, git (https), ssh, tmux, job control (Ctrl-Z, fg, bg), ps/top, several tabs, sessions that come back after the app is closed. Not there: graphical programs, systemd services, Docker.
+
+Other apps by the same author: [Tuple](https://heyobi.github.io/pgnotebook/) (PostgreSQL on iPhone), [Querly](https://heyobi.github.io/querly/) (CSV, Excel and DuckDB on iPhone).
 
 ## How it works
 

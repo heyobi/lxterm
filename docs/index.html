@@ -1,0 +1,90 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LxTerm: a real Linux terminal on iPhone and iPad | Debian, apt, Python, pip, SSH, tmux</title>
+<meta name="description" content="A real Linux terminal for iPhone and iPad: Debian 13 arm64 runs unmodified on the device, with apt, bash, Python 3 and pip, git, SSH, tmux, nano and job control. No jailbreak, no cloud machine, no account.">
+<meta name="keywords" content="Linux on iPhone, run Linux on iPhone without jailbreak, Debian on iPhone, Linux terminal iOS, apt on iPhone, Python pip iPhone, SSH client with Linux iPhone, tmux iPhone, bash shell iPad, iSH alternative, a-Shell alternative, command line iPhone">
+<link rel="canonical" href="https://heyobi.github.io/lxterm/">
+<link rel="icon" href="icon.png">
+<meta name="apple-itunes-app" content="app-id=6838355342">
+<meta property="og:type" content="website">
+<meta property="og:title" content="LxTerm: a real Linux terminal on iPhone and iPad | Debian, apt, Python, pip, SSH, tmux">
+<meta property="og:description" content="A real Linux terminal for iPhone and iPad: Debian 13 arm64 runs unmodified on the device, with apt, bash, Python 3 and pip, git, SSH, tmux, nano and job control. No jailbreak, no cloud machine, no account.">
+<meta property="og:url" content="https://heyobi.github.io/lxterm/">
+<meta property="og:image" content="https://heyobi.github.io/lxterm/screens/iphone-1-fetch.jpg">
+<meta name="twitter:card" content="summary_large_image">
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "SoftwareApplication", "name": "LxTerm Shell", "operatingSystem": "iOS, iPadOS", "applicationCategory": "DeveloperApplication", "description": "A real Linux terminal for iPhone and iPad: Debian 13 arm64 runs unmodified on the device, with apt, bash, Python 3 and pip, git, SSH, tmux, nano and job control. No jailbreak, no cloud machine, no account.", "url": "https://apps.apple.com/app/id6838355342", "downloadUrl": "https://apps.apple.com/app/id6838355342", "image": "https://heyobi.github.io/lxterm/icon.png", "screenshot": ["https://heyobi.github.io/lxterm/screens/iphone-1-fetch.jpg", "https://heyobi.github.io/lxterm/screens/iphone-2-python.jpg", "https://heyobi.github.io/lxterm/screens/iphone-3-tmux.jpg", "https://heyobi.github.io/lxterm/screens/iphone-4-keys.jpg", "https://heyobi.github.io/lxterm/screens/iphone-5-theme.jpg"], "offers": {"@type": "Offer", "price": "0", "priceCurrency": "USD"}, "author": {"@type": "Person", "name": "heyobi", "url": "https://github.com/heyobi"}}</script>
+<script type="application/ld+json">{"@context": "https://schema.org", "@type": "FAQPage", "mainEntity": [{"@type": "Question", "name": "Can I run Linux on an iPhone without a jailbreak?", "acceptedAnswer": {"@type": "Answer", "text": "Yes. Install LxTerm from the App Store and open it: Debian 13 for arm64 starts on the phone itself in a few seconds, with no jailbreak, no sideloading and no remote server."}}, {"@type": "Question", "name": "How do I use apt on my iPhone?", "acceptedAnswer": {"@type": "Answer", "text": "Open LxTerm and type apt update, then apt install followed by a package name, for example apt install htop. Packages come from Debian's own mirrors."}}, {"@type": "Question", "name": "Can I run Python and pip on iPhone?", "acceptedAnswer": {"@type": "Answer", "text": "Yes. Python 3 is installed; add pip with apt install python3-pip and install packages from PyPI, including compiled ones such as polars, because LxTerm runs real Linux arm64 binaries."}}, {"@type": "Question", "name": "Does LxTerm have SSH and tmux?", "acceptedAnswer": {"@type": "Answer", "text": "Yes. tmux is installed, and OpenSSH is one apt install away (apt install openssh-client). Ctrl-C, Ctrl-Z and job control work as on Linux."}}, {"@type": "Question", "name": "How is LxTerm different from iSH and a-Shell?", "acceptedAnswer": {"@type": "Answer", "text": "iSH emulates a 32-bit x86 PC running Alpine; a-Shell offers commands ported to iOS. LxTerm runs Debian's own 64-bit ARM programs unmodified, with apt and Debian's whole package archive."}}, {"@type": "Question", "name": "Is it fast?", "acceptedAnswer": {"@type": "Answer", "text": "Programs run in an interpreter, because iOS allows no JIT. Shell work, scripts, editors, git and Python are comfortable; heavy computing such as large compiles is slower than on a computer."}}, {"@type": "Question", "name": "Is LxTerm free?", "acceptedAnswer": {"@type": "Answer", "text": "Yes, free with no ads or purchases, and open source under the GPL-3.0."}}]}</script>
+<style>
+:root{--bg:#fff;--fg:#14141a;--muted:#5b5b6b;--card:#f4f5f8;--line:#e3e5ec;--accent:#4f6bff}
+@media (prefers-color-scheme:dark){:root{--bg:#0b0b10;--fg:#f2f2f6;--muted:#a4a4b4;--card:#16161e;--line:#262633;--accent:#7d93ff}}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:17px/1.6 -apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif}
+main{max-width:1040px;margin:0 auto;padding:40px 16px 64px}
+header{text-align:center}header img.icon{width:112px;height:112px;border-radius:24px;box-shadow:0 10px 30px rgba(0,0,0,.18)}
+h1{font-size:clamp(30px,5vw,46px);line-height:1.15;margin:18px 0 10px;letter-spacing:-.02em}
+.lead{font-size:clamp(17px,2.2vw,20px);color:var(--muted);max-width:720px;margin:0 auto 22px}
+.badge img{height:54px}
+.shots{display:flex;gap:14px;overflow-x:auto;padding:28px 0 8px;scroll-snap-type:x mandatory}
+.shots img{height:min(560px,70vh);border-radius:18px;scroll-snap-align:center;flex:none;box-shadow:0 8px 24px rgba(0,0,0,.15)}
+h2{font-size:28px;margin:48px 0 12px;letter-spacing:-.01em}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:14px}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px}
+.card b{display:block;margin-bottom:4px}
+details{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:14px 18px;margin:10px 0}
+summary{font-weight:600;cursor:pointer}
+a{color:var(--accent)}code{font:15px ui-monospace,Menlo,monospace;background:var(--card);padding:1px 6px;border-radius:6px}
+.wide img{width:100%;border-radius:18px;box-shadow:0 8px 24px rgba(0,0,0,.15)}
+footer{color:var(--muted);font-size:14px;margin-top:56px;text-align:center}
+</style>
+</head>
+<body>
+<main>
+<header>
+  <img class="icon" src="icon.png" alt="LxTerm Shell app icon" width="112" height="112">
+  <h1>Run real Linux on your iPhone</h1>
+  <p class="lead">LxTerm runs Debian 13 for arm64 on a normal, non-jailbroken iPhone and iPad: install software with apt, run Python with pip, keep sessions in tmux and connect over SSH. Offline, private, free and open source.</p>
+  <a class="badge" href="https://apps.apple.com/app/id6838355342"><img src="app-store-badge.svg" alt="Download LxTerm Shell on the App Store"></a>
+</header>
+<div class="shots">
+    <img src="screens/iphone-1-fetch.jpg" alt="fastfetch in Debian 13 on an iPhone" loading="lazy">
+    <img src="screens/iphone-2-python.jpg" alt="The Python 3 REPL" loading="lazy">
+    <img src="screens/iphone-3-tmux.jpg" alt="tmux with nano in a split pane" loading="lazy">
+    <img src="screens/iphone-4-keys.jpg" alt="The key row with Esc, Ctrl, Tab and arrows above the keyboard" loading="lazy">
+    <img src="screens/iphone-5-theme.jpg" alt="The Solarized theme" loading="lazy">
+</div>
+<h2>A real Linux system, not a set of ported commands</h2>
+<div class="grid">
+    <div class="card"><b>Debian 13, unmodified</b>Debian&#x27;s own arm64 programs, exactly as Debian builds them: glibc, bash, coreutils, dpkg and apt.</div>
+    <div class="card"><b>apt works</b>Thousands of packages from Debian&#x27;s archive are one command away: git, vim, htop, ssh and more.</div>
+    <div class="card"><b>Python and pip</b>Python 3 comes installed; pip installs Linux packages from PyPI, including compiled libraries such as polars.</div>
+    <div class="card"><b>tmux and job control</b>Ctrl-C, Ctrl-Z, fg and bg work as on any Linux machine; split panes in tmux.</div>
+    <div class="card"><b>SSH and git</b>Connect to your servers with OpenSSH and clone repositories over https or ssh.</div>
+    <div class="card"><b>Made for the phone</b>A native app with tabs, a key row (Esc, Ctrl, Tab, arrows, symbols), themes and adjustable font size. Your terminal is there when you come back.</div>
+    <div class="card"><b>iPad</b>A full-size terminal with a hardware keyboard or the on-screen one.</div>
+    <div class="card"><b>Private and offline</b>Everything runs on your device; the network is used only when you run apt, pip, ssh or curl. No data is collected.</div>
+</div>
+<h2>On iPad</h2>
+<div class="shots">
+    <img src="screens/ipad-1-fetch.jpg" alt="iPad: fastfetch in Debian 13" loading="lazy">
+    <img src="screens/ipad-3-tmux.jpg" alt="iPad: tmux with nano" loading="lazy">
+    <img src="screens/ipad-4-keys.jpg" alt="iPad: the key row above the keyboard" loading="lazy">
+</div>
+<h2>How it works</h2>
+<p>iOS does not let apps generate machine code, so LxTerm brings its own AArch64 interpreter and a Linux system-call layer: real <code>fork</code> and <code>execve</code>, pipes, signals, job control and a terminal with Linux's line discipline. Debian's binaries run inside it as they would on an arm64 machine. Heavy number crunching is slower than on a computer; everyday command-line work, scripting and learning Linux feel at home. The code is open source on <a href="https://github.com/heyobi/lxterm">GitHub</a>.</p>
+<h2>Questions</h2>
+  <details><summary>Can I run Linux on an iPhone without a jailbreak?</summary><p>Yes. Install LxTerm from the App Store and open it: Debian 13 for arm64 starts on the phone itself in a few seconds, with no jailbreak, no sideloading and no remote server.</p></details>
+  <details><summary>How do I use apt on my iPhone?</summary><p>Open LxTerm and type apt update, then apt install followed by a package name, for example apt install htop. Packages come from Debian&#x27;s own mirrors.</p></details>
+  <details><summary>Can I run Python and pip on iPhone?</summary><p>Yes. Python 3 is installed; add pip with apt install python3-pip and install packages from PyPI, including compiled ones such as polars, because LxTerm runs real Linux arm64 binaries.</p></details>
+  <details><summary>Does LxTerm have SSH and tmux?</summary><p>Yes. tmux is installed, and OpenSSH is one apt install away (apt install openssh-client). Ctrl-C, Ctrl-Z and job control work as on Linux.</p></details>
+  <details><summary>How is LxTerm different from iSH and a-Shell?</summary><p>iSH emulates a 32-bit x86 PC running Alpine; a-Shell offers commands ported to iOS. LxTerm runs Debian&#x27;s own 64-bit ARM programs unmodified, with apt and Debian&#x27;s whole package archive.</p></details>
+  <details><summary>Is it fast?</summary><p>Programs run in an interpreter, because iOS allows no JIT. Shell work, scripts, editors, git and Python are comfortable; heavy computing such as large compiles is slower than on a computer.</p></details>
+  <details><summary>Is LxTerm free?</summary><p>Yes, free with no ads or purchases, and open source under the GPL-3.0.</p></details>
+<footer>
+  <p><a href="https://apps.apple.com/app/id6838355342">LxTerm Shell on the App Store</a> · <a href="https://github.com/heyobi/lxterm">Source code on GitHub</a> · <a href="https://heyobi.github.io/pgnotebook/">Tuple: PostgreSQL on iPhone</a> · <a href="https://heyobi.github.io/querly/">Querly: CSV and DuckDB on iPhone</a></p>
+  <p>Debian is a registered trademark of Software in the Public Interest, Inc. LxTerm is not affiliated with or endorsed by the Debian Project. Linux is a registered trademark of Linus Torvalds.</p>
+</footer>
+</main>
+</body>
+</html>
