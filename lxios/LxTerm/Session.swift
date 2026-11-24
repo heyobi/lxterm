@@ -13,7 +13,6 @@ final class Session: NSObject, ObservableObject, Identifiable, TerminalViewDeleg
     private(set) var resumed = false
     private var size: (cols: Int, rows: Int)?    // the view's last size: sent again once the shell runs
     var ctrlArmed = false                         // the key bar's Ctrl: applies to the next key
-    var lastOutput = Date()                       // when the shell last wrote (screenshot tour)
     private weak var keyBar: KeyBar?
     lazy var view: TerminalView = makeView()
 
@@ -50,6 +49,12 @@ final class Session: NSObject, ObservableObject, Identifiable, TerminalViewDeleg
     /// A tap on the terminal brings the keyboard back after it was hidden.
     @objc private func tapped() {
         if !view.isFirstResponder { _ = view.becomeFirstResponder() }
+    }
+
+    /// The last `n` bytes of output as text (screenshot tour).
+    func tail(_ n: Int) -> String {
+        lock.lock(); defer { lock.unlock() }
+        return String(decoding: history.suffix(n), as: UTF8.self)
     }
 
     /// Keys from the key bar (Ctrl applies to them too).
@@ -131,7 +136,6 @@ final class Session: NSObject, ObservableObject, Identifiable, TerminalViewDeleg
     private func output(_ p: UnsafeRawPointer, _ n: Int) {
         let bytes = UnsafeRawBufferPointer(start: p, count: n)
         lock.lock()
-        lastOutput = Date()
         pending.append(contentsOf: bytes)
         history.append(contentsOf: bytes)
         if history.count > Session.historyMax + 64 * 1024 { history.removeFirst(history.count - Session.historyMax) }

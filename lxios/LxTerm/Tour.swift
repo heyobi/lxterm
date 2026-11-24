@@ -2,41 +2,49 @@ import Foundation
 import UIKit
 
 /// App Store screenshots (launch argument -shots, scripts/sim-shots.sh): types commands into the
-/// first shell as a user would, waits until the output has been quiet for a while, writes the
-/// scene's name to Documents/shots/ready and waits for the script to answer in
-/// Documents/shots/next before the next scene.
+/// first shell as a user would, waiting after each one for the shell's (or Python's) prompt, writes
+/// the scene's name to Documents/shots/ready and waits for the script to answer in
+/// Documents/shots/next before the next scene. Needs no network (fastfetch is in the root).
 @MainActor
 enum Tour {
+    private enum Wait { case prompt, seconds(Double) }
     private struct Scene {
-        let name: String?                 // nil: preparation, no screenshot
-        let keys: [String]
-        let quiet: TimeInterval           // seconds without output that mean "done"
+        let name: String?                 // nil: between scenes, no screenshot
+        let steps: [(String, Wait)]
         var keyboard = false
         var theme: String? = nil
     }
 
     private static let scenes: [Scene] = [
-        Scene(name: nil, keys: ["apt-get update -qq >/dev/null 2>&1; apt-get install -y -qq fastfetch >/dev/null 2>&1; clear\r"], quiet: 12),
-        Scene(name: "fetch", keys: ["fastfetch\r"], quiet: 5),
-        Scene(name: "python", keys: ["clear\r", "python3\r", "import statistics, platform\r",
-                                     "platform.machine(), platform.system()\r",
-                                     "data = [12, 7, 3, 21, 8, 15]\r",
-                                     "statistics.mean(data), sorted(data)\r",
-                                     "{w: len(w) for w in 'apt pip ssh tmux'.split()}\r"], quiet: 4),
-        Scene(name: nil, keys: ["exit()\r", "clear\r"], quiet: 2),
-        Scene(name: "tmux", keys: ["tmux new-session \\; split-window -v top \\; select-pane -t 0\r",
-                                   "ls -l --color=always /usr/bin | head -n 8\r"], quiet: 5),
-        Scene(name: nil, keys: ["tmux kill-server\r", "clear\r"], quiet: 3),
-        Scene(name: "keys", keys: ["curl -sI https://deb.debian.org | head -n 4\r"], quiet: 5, keyboard: true),
-        Scene(name: "theme", keys: ["clear\r", "ls -la --color=always /\r"], quiet: 4, theme: "solarized"),
+        Scene(name: "fetch", steps: [("clear\r", .prompt), ("fastfetch\r", .prompt)]),
+        Scene(name: "python", steps: [("clear\r", .prompt), ("python3\r", .prompt),
+                                      ("import statistics, platform\r", .prompt),
+                                      ("platform.machine(), platform.system()\r", .prompt),
+                                      ("data = [12, 7, 3, 21, 8, 15]\r", .prompt),
+                                      ("statistics.mean(data), sorted(data)\r", .prompt),
+                                      ("{w: len(w) for w in 'apt pip ssh tmux'.split()}\r", .prompt)]),
+        Scene(name: nil, steps: [("exit()\r", .prompt), ("clear\r", .prompt)]),
+        Scene(name: "tmux", steps: [("tmux new-session \\; split-window -v top \\; select-pane -t 0\r", .seconds(8)),
+                                    ("ls -l --color=always /usr/bin | head -n 8\r", .seconds(4))]),
+        Scene(name: nil, steps: [("tmux kill-server\r", .seconds(4)), ("clear\r", .prompt)]),
+        Scene(name: "keys", steps: [("uname -sm; nproc; head -n 3 /proc/meminfo\r", .prompt)], keyboard: true),
+        Scene(name: "theme", steps: [("clear\r", .prompt), ("ls -la --color=always /\r", .prompt)], theme: "solarized"),
     ]
+
+    /// The last output without escape sequences ends in a prompt: bash's "# " or Python's ">>> ".
+    private static func atPrompt(_ s: Session) -> Bool {
+        var t = s.tail(400)
+        while let r = t.range(of: "\u{1b}\\[[0-9;?]*[A-Za-z]", options: .regularExpression) { t.removeSubrange(r) }
+        return t.hasSuffix("# ") || t.hasSuffix(">>> ")
+    }
 
     static func run(_ store: Store) {
         let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("shots")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         Task { @MainActor in
-            try? await Task.sleep(nanoseconds: 3_000_000_000)
             guard let s = store.current else { return }
+            var waited = 0
+            while !atPrompt(s) && waited < 120 { try? await Task.sleep(nanoseconds: 500_000_000); waited += 1 }
             _ = s.view.resignFirstResponder()
             for scene in scenes {
                 if let t = scene.theme {
@@ -44,13 +52,17 @@ enum Tour {
                     NotificationCenter.default.post(name: .lxFontChanged, object: nil)
                 }
                 if scene.keyboard { _ = s.view.becomeFirstResponder() } else { _ = s.view.resignFirstResponder() }
-                for k in scene.keys {
-                    for ch in k.utf8 { s.sendKeys([ch]); try? await Task.sleep(nanoseconds: 25_000_000) }
-                    try? await Task.sleep(nanoseconds: 600_000_000)
-                }
-                let start = Date()
-                while Date().timeIntervalSince(s.lastOutput) < scene.quiet && Date().timeIntervalSince(start) < 1200 {
-                    try? await Task.sleep(nanoseconds: 500_000_000)
+                for (keys, wait) in scene.steps {
+                    for ch in keys.utf8 { s.sendKeys([ch]); try? await Task.sleep(nanoseconds: 20_000_000) }
+                    try? await Task.sleep(nanoseconds: 300_000_000)
+                    switch wait {
+                    case .seconds(let n):
+                        try? await Task.sleep(nanoseconds: UInt64(n * 1e9))
+                    case .prompt:
+                        var n = 0
+                        while !atPrompt(s) && n < 600 { try? await Task.sleep(nanoseconds: 250_000_000); n += 1 }
+                        try? await Task.sleep(nanoseconds: 500_000_000)
+                    }
                 }
                 guard let name = scene.name else { continue }
                 try? name.write(to: dir.appendingPathComponent("ready"), atomically: true, encoding: .utf8)
