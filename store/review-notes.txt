@@ -1,11 +1,15 @@
-LxTerm is a terminal app. It contains a Debian 13 arm64 user space (Debian's own unmodified programs) and runs it with an AArch64 interpreter and a Linux system-call layer written for this app (open source: https://github.com/heyobi/lxterm).
+1. Screen recording: a recording of the app on a physical iPhone is attached (Review Information).
 
-- No JIT and no native code generation: every Linux program is interpreted instruction by instruction inside the app's sandbox. The app's own executable code is fixed at build time.
-- Programs run only when the user types a command. Packages are downloaded only when the user runs apt or pip themselves, as in other terminal apps on the App Store (iSH, a-Shell).
-- No account and no login. No data is collected.
+2. Purpose and audience: LxTerm is a terminal app for developers, students and anyone learning Linux. It contains a Debian 13 arm64 user space (Debian's own unmodified programs) and runs it with an AArch64 interpreter and a Linux system-call layer written for this app (open source: https://github.com/heyobi/lxterm). There is no JIT and no native code generation: every Linux program is interpreted instruction by instruction inside the app's sandbox. The app's own executable code is fixed at build time.
 
-How to try it:
-1. Open the app. The first launch unpacks the bundled system (a few seconds).
-2. Type: ls /   then   python3   (Ctrl-D to leave)
-3. Optional, needs the network: apt update && apt install -y fastfetch && fastfetch
-The key row above the keyboard has Esc, Ctrl, Tab and arrows; the keyboard key hides it.
+3. How to use it (no account, no login):
+   - Open the app. The first launch unpacks the bundled system (a few seconds).
+   - Type: fastfetch     then: python3     (Ctrl-D, or the ^D key, leaves Python)
+   - Optional, uses the network: apt update && apt install -y htop && htop   (q quits)
+   - The key row above the keyboard has Esc, Ctrl, Tab and arrows; its keyboard key hides the keyboard. The + button opens another shell; the gear opens Settings (themes, font size, licenses).
+
+4. External services: none of our own. Programs run only when the user types a command. If the user runs apt, pip, curl or ssh, those programs connect to the servers the user chooses (Debian's package mirrors, PyPI, the user's own servers), as in other terminal apps on the App Store (iSH, a-Shell). No data is collected.
+
+5. Regional differences: none. The app works the same in every region and needs no network for its core function.
+
+6. Regulated content: none. No user accounts, no social features, no payments, no ads.

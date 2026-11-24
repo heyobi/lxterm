@@ -10,7 +10,7 @@ from PIL import Image, ImageDraw, ImageFilter, ImageFont
 ORDER = [
     ('fetch', 'Real Linux on iPhone', 'apt, bash, Python, tmux and SSH'),
     ('python', 'Python 3 in your pocket', 'pip and real PyPI packages'),
-    ('tmux', 'tmux, top, job control', 'Ctrl-C and Ctrl-Z work like on Linux'),
+    ('tmux', 'tmux, nano, job control', 'Ctrl-C and Ctrl-Z work like on Linux'),
     ('keys', 'The keys a phone lacks', 'Esc, Ctrl, Tab and arrows'),
     ('theme', 'Make it yours', 'Themes, font size, several shells'),
 ]
