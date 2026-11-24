@@ -1,0 +1,11 @@
+LxTerm is a terminal app. It contains a Debian 13 arm64 user space (Debian's own unmodified programs) and runs it with an AArch64 interpreter and a Linux system-call layer written for this app (open source: https://github.com/heyobi/lxterm).
+
+- No JIT and no native code generation: every Linux program is interpreted instruction by instruction inside the app's sandbox. The app's own executable code is fixed at build time.
+- Programs run only when the user types a command. Packages are downloaded only when the user runs apt or pip themselves, as in other terminal apps on the App Store (iSH, a-Shell).
+- No account and no login. No data is collected.
+
+How to try it:
+1. Open the app. The first launch unpacks the bundled system (a few seconds).
+2. Type: ls /   then   python3   (Ctrl-D to leave)
+3. Optional, needs the network: apt update && apt install -y fastfetch && fastfetch
+The key row above the keyboard has Esc, Ctrl, Tab and arrows; the keyboard key hides it.
