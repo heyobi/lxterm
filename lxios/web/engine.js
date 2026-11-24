@@ -102,26 +102,38 @@ function save() {
     } catch (e) {}
 }
 
-// the terminal's host turn (lxrun -i): output to the app, keys back; the app may also send
-// a new window size (X-Size: cols,rows) or ask for a save (X-Save)
-function lxPoll(out, waitMs) {
+// the terminals' host turn (lxrun -i, several sessions: tools/lxrun.c): every tab's output to
+// the app as frames ([u32 id][u32 length][bytes]) with titles and ended sessions in X-Meta;
+// the answer is the keys (frames), X-Ctl (new, resized, closed sessions) and X-Save
+function lxPollMulti(out, waitMs, meta) {
     let total = 0;
-    for (const c of out) total += c.length;
-    const body = new Uint8Array(total);
+    for (const [, c] of out) total += 8 + c.length;
+    const body = new Uint8Array(total), dv = new DataView(body.buffer);
     let o = 0;
-    for (const c of out) { body.set(c, o); o += c.length; }
+    for (const [id, c] of out) { dv.setUint32(o, id, true); dv.setUint32(o + 4, c.length, true); body.set(c, o + 8); o += 8 + c.length; }
     const x = new XMLHttpRequest();
     x.open('POST', 'lx://host/tty?wait=' + waitMs + '&n=' + (++ttySeq), false);
     x.overrideMimeType('text/plain; charset=x-user-defined');
+    if (meta) x.setRequestHeader('X-Meta', encodeURIComponent(meta));
     x.send(body);
-    const size = x.getResponseHeader('X-Size');
-    if (size && M) { const [c, r] = size.split(',').map(Number); M.lxSize = [c, r]; }
+    const ctl = x.getResponseHeader('X-Ctl');
+    if (ctl && M) M.lxCtl = (M.lxCtl || '') + ctl;
     if (x.getResponseHeader('X-Save')) save();
     const s = x.responseText;
     if (!s.length) return null;
     const r = new Uint8Array(s.length);
     for (let i = 0; i < s.length; i++) r[i] = s.charCodeAt(i) & 255;
     return r;
+}
+
+// the native engine's root (what the user installed before), or else the root in the app
+async function firstRoot() {
+    try {
+        const res = await fetch('native-root.tar');
+        const b = new Uint8Array(await res.arrayBuffer());
+        if (b.length > 1024) return b;
+    } catch (e) {}
+    return gunzipped('rootfs-debian.tar.gz');
 }
 
 onmessage = async e => {
@@ -135,10 +147,11 @@ onmessage = async e => {
         if (saveHandle.getSize() > 0 && !e.data.fresh) {
             tar = new Uint8Array(saveHandle.getSize());
             saveHandle.read(tar, { at: 0 });
-        } else tar = await gunzipped('rootfs-debian.tar.gz');
+        } else tar = await firstRoot();
         M = await createLx({
-            print: s => {}, printErr: s => {}, lxPoll,
-            preRun: [m => { m.ENV.TERM = 'xterm-256color'; m.ENV.LXRUN_QUIET = '1'; m.ENV.LANG = 'C.UTF-8'; }],
+            print: s => {}, printErr: s => {}, lxPollMulti,
+            preRun: [m => { m.ENV.TERM = 'xterm-256color'; m.ENV.LXRUN_QUIET = '1'; m.ENV.LANG = 'C.UTF-8';
+                            m.ENV.LXRUN_MULTI = '1'; m.ENV.LXRUN_SESSION = String(e.data.id || 0); }],
         });
         untar(M.FS, tar, '/r');
         tar = null;

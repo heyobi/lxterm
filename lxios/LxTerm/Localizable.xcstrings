@@ -322,12 +322,22 @@
         }
       }
     },
-    "New tabs run Debian in WebKit's WebAssembly engine, which compiles the programs as they run: often several times faster. One tab at a time (marked ⚡); it keeps its own copy of the system. /root/Files there is the LxTerm folder in the Files app.": {
+    "New tabs (marked ⚡) run Debian in WebKit's WebAssembly engine, which compiles programs as they run: long jobs are several times faster. It starts from a copy of your system and keeps its own from then on.": {
       "localizations": {
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Yeni sekmeler Debian'ı WebKit'in WebAssembly motorunda çalıştırır; programlar çalışırken derlenir, çoğu zaman birkaç kat daha hızlıdır. Aynı anda bir sekme (⚡ ile işaretli); sistemin kendi kopyasını tutar. Oradaki /root/Files, Dosyalar uygulamasındaki LxTerm klasörüdür."
+            "value": "Yeni sekmeler (⚡ ile işaretli) Debian'ı WebKit'in WebAssembly motorunda çalıştırır; programlar çalışırken derlenir, uzun işler birkaç kat hızlıdır. Sisteminizin bir kopyasıyla başlar, sonra kendi kopyasını tutar."
+          }
+        }
+      }
+    },
+    "The accelerated engine was stopped by iOS (memory). Tap to start again.": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hızlandırılmış motor iOS tarafından durduruldu (bellek). Yeniden başlatmak için dokunun."
           }
         }
       }

@@ -58,6 +58,7 @@ final class Store: ObservableObject {
             lx_engine_trace(docs.appendingPathComponent("lxterm.trace").path)
         }
         lx_engine_init(Store.rootDir.path)
+        lx_engine_bind_files(SharedFiles.shared.root.path)
         phase = .ready
         let ids = UserDefaults.standard.stringArray(forKey: Store.idsKey) ?? []
         let fast = Set(UserDefaults.standard.stringArray(forKey: Store.fastKey) ?? [])
@@ -65,6 +66,7 @@ final class Store: ObservableObject {
         if ProcessInfo.processInfo.arguments.contains("-accel") {     // CI: the accelerated engine
             UserDefaults.standard.set(true, forKey: "webEngine")
             sessions = [Session(accelerated: true)]
+            DispatchQueue.main.asyncAfter(deadline: .now() + 140) { self.newSession() }   // a second tab in the same engine
         }
         if sessions.isEmpty { sessions = [Session()] }
         selected = min(UserDefaults.standard.integer(forKey: "selected"), sessions.count - 1)
@@ -72,11 +74,9 @@ final class Store: ObservableObject {
         if ProcessInfo.processInfo.arguments.contains("-shots") { Tour.run(self) }
     }
 
-    /// A new tab runs in the accelerated engine when Settings › Accelerated engine is on and
-    /// no other tab uses it (the engine runs one shell).
+    /// A new tab runs in the accelerated engine when Settings › Accelerated engine is on.
     private func makeSession() -> Session {
-        let fast = UserDefaults.standard.bool(forKey: "webEngine") && !sessions.contains { $0.accelerated }
-        return Session(accelerated: fast)
+        Session(accelerated: UserDefaults.standard.bool(forKey: "webEngine"))
     }
 
     func newSession() {

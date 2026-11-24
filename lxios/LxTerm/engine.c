@@ -75,6 +75,14 @@ void lx_engine_init(const char *root)
     write_resolv(root);
 }
 
+void lx_engine_bind_files(const char *host)
+{
+    char d[1100];
+    snprintf(d, sizeof d, "%s/root/Files", g_root);              /* (so that ls /root shows it) */
+    mkdir(d, 0755);
+    aoi_proc_bind("/root/Files", host);
+}
+
 const char *lx_unpack(const char *archive, const char *dir, unsigned long *files,
                       void (*progress)(void *ctx, double f), void *ctx)
 {

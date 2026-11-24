@@ -73,10 +73,11 @@ jobs:
           ls -la shots
           echo "== accelerated engine"
           xcrun simctl terminate "$UDID" com.heyobi.lxterm || true
-          xcrun simctl launch "$UDID" com.heyobi.lxterm -accel; sleep 170
+          xcrun simctl launch "$UDID" com.heyobi.lxterm -accel; sleep 200
           xcrun simctl io "$UDID" screenshot shots/3-accel.png
           cat "$C/Documents/accel.log" | sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g' | tail -n 60 || true
           echo "== shared folder"; ls -la "$C/Documents/Files" || true
+          echo "== second tab"; cat "$C/Documents/accel-2.log" | sed "s/\x1b\[[0-9;?]*[a-zA-Z]//g" | tail -n 30 || true; tail -n 2 "$C/Documents/accel.log"
           cat shots/lxterm.trace* | grep -E "stopped|not impl|exec|\[unix\]|\[tty\]|\[proc\]|ended|= -(22|38|95|9|14|13|1)$" | grep -v "^\[sched" | head -n 120 || true
       - uses: actions/upload-artifact@v4
         if: always()

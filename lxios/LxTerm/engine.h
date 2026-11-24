@@ -13,6 +13,8 @@ void lx_engine_trace(const char *path);
 
 /* Once per launch: the root (unpacked), DNS servers for it, the fd limit. */
 void lx_engine_init(const char *root);
+/* The guest's /root/Files is `host` (the folder shared with the Files app). */
+void lx_engine_bind_files(const char *host);
 
 /* Unpacks a .tar.gz root into dir. NULL, or what went wrong; *files counts regular files,
  * progress (0..1, from the archive's bytes read) is called now and then. */

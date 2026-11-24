@@ -4,64 +4,103 @@ import WebKit
 
 /// The accelerated engine (Settings › Accelerated engine): the same core built for WebAssembly
 /// runs in a hidden WKWebView, where the JavaScript engine's JIT compiles the guest code the
-/// core translates (the only JIT iOS gives an app). One shell at a time. The page reaches the
-/// app over lx://host/: `tty` (the terminal: output in, keys out, held while no key is due),
-/// `net/…` (TCP connections and names for the guest), `fs/…` (the guest's /root/Files is
-/// Documents/Files, seen in the Files app); everything else comes from the app bundle.
-final class WebEngine: NSObject, WKURLSchemeHandler, WKScriptMessageHandler {
+/// core translates (the only JIT iOS gives an app). Every ⚡ tab is a session of one core:
+/// its own terminal and bash, one file system. The page reaches the app over lx://host/:
+/// `tty` (every tab's output in, keys out, held while nothing is due), `net/…` (TCP
+/// connections, listening sockets and names for the guest), `fs/…` (the guest's /root/Files
+/// is Documents/Files, seen in the Files app); everything else comes from the app bundle.
+final class WebEngine: NSObject, WKURLSchemeHandler, WKScriptMessageHandler, WKNavigationDelegate {
     static let shared = WebEngine()
 
     private var web: WKWebView?
-    private weak var session: Session?
-    private var pageReady = false, startPending = false, fresh = false
+    private var pageReady = false, booted = false
+    private var first: (id: Int, cols: Int, rows: Int)?     // the session the core starts with
+    private var sessions: [Int: Session] = [:]
+    private var nextID = 1
 
     // terminal state, main thread only
-    private var keys = [UInt8]()
-    private var size: (Int, Int)?
+    private var keys: [Int: [UInt8]] = [:]
+    private var ctl = ""                                   // N id c r; S id c r; C id;
     private var saveWanted = false
     private var waiting: (task: WKURLSchemeTask, url: URL, id: Int)?
     private var waitID = 0
     private var stopped = Set<ObjectIdentifier>()
 
-    var running: Bool { session != nil }
+    /// Settings › Reset: the engine's next start uses the root in the app, not its saved copy.
+    static func resetRoot() {
+        UserDefaults.standard.set(true, forKey: "webFresh")
+        if shared.booted { shared.shutDown("") }
+    }
 
-    /// Settings › Reset: the engine's next shell starts from the root in the app, not its saved copy.
-    static func resetRoot() { UserDefaults.standard.set(true, forKey: "webFresh") }
+    /// Starts a shell for `s`; returns its session id.
+    @discardableResult
+    func start(_ s: Session, cols: Int, rows: Int) -> Int {
+        let id = nextID
+        nextID += 1
+        sessions[id] = s
+        if booted { ctl += "N \(id) \(cols) \(rows);"; answerWaiting() }
+        else if first == nil {
+            first = (id, cols, rows)
+            if web == nil { makeWeb() }
+            if pageReady { boot() }
+        } else { ctl += "N \(id) \(cols) \(rows);" }          // (sent once the core runs)
+        return id
+    }
 
-    /// Starts a shell for `s` (a fresh root when `freshRoot`: Settings › Reset).
-    func start(_ s: Session, cols: Int, rows: Int, freshRoot: Bool = false) {
-        session = s
-        size = (cols, rows)
-        fresh = freshRoot || UserDefaults.standard.bool(forKey: "webFresh")
+    private func boot() {
+        guard let f = first else { return }
+        let fresh = UserDefaults.standard.bool(forKey: "webFresh")
         UserDefaults.standard.removeObject(forKey: "webFresh")
-        keys.removeAll()
-        if web == nil { makeWeb() }
-        if pageReady { web?.evaluateJavaScript("lxStart(\(fresh))") } else { startPending = true }
+        booted = true
+        ctl = "S \(f.id) \(f.cols) \(f.rows);" + ctl
+        web?.evaluateJavaScript("lxStart(\(fresh), \(f.id))")
     }
 
-    func input(_ bytes: [UInt8]) {
-        keys.append(contentsOf: bytes)
+    func input(_ s: Session, _ bytes: [UInt8]) {
+        guard let id = s.webID else { return }
+        keys[id, default: []].append(contentsOf: bytes)
         answerWaiting()
     }
 
-    func resize(cols: Int, rows: Int) {
-        size = (cols, rows)
+    func resize(_ s: Session, cols: Int, rows: Int) {
+        guard let id = s.webID else { return }
+        if first?.id == id && !booted { first = (id, cols, rows); return }
+        ctl += "S \(id) \(cols) \(rows);"
         answerWaiting()
     }
 
-    /// The root goes to OPFS at the shell's next turn (the app goes to the background).
+    /// The root goes to OPFS at the core's next turn (the app goes to the background).
     func save() {
+        guard booted else { return }
         saveWanted = true
         answerWaiting()
     }
 
-    /// The page is dropped: the shell ends without a save (Close tab).
-    func stop() {
-        session = nil
-        web?.removeFromSuperview()
-        web = nil
+    /// A tab is closed: its session ends (the others keep running).
+    func close(_ s: Session) {
+        guard let id = s.webID else { return }
+        sessions[id] = nil
+        keys[id] = nil
+        ctl += "C \(id);"
+        answerWaiting()
+    }
+
+    /// The page is gone (WebKit ended it, or Reset): every ⚡ tab's shell ends.
+    private func shutDown(_ why: String) {
+        let all = sessions.values
+        sessions = [:]
+        keys = [:]
+        ctl = ""
+        first = nil
+        booted = false
         pageReady = false
         waiting = nil
+        web?.removeFromSuperview()
+        web = nil
+        for s in all {
+            if !why.isEmpty { s.webOutput(Data(("\r\n[engine] " + why + "\r\n").utf8)) }
+            s.shellEnded()
+        }
     }
 
     private func makeWeb() {
@@ -70,12 +109,17 @@ final class WebEngine: NSObject, WKURLSchemeHandler, WKScriptMessageHandler {
         cfg.userContentController.add(self, name: "engine")
         let w = WKWebView(frame: CGRect(x: 0, y: 0, width: 1, height: 1), configuration: cfg)
         w.isHidden = true
+        w.navigationDelegate = self
         if #available(iOS 16.4, *) { w.isInspectable = true }
         if let win = UIApplication.shared.connectedScenes.compactMap({ ($0 as? UIWindowScene)?.keyWindow }).first {
             win.addSubview(w)                                      // (a web view outside a window may be throttled)
         }
         web = w
         w.load(URLRequest(url: URL(string: "lx://host/engine.html")!))
+    }
+
+    func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
+        shutDown(String(localized: "The accelerated engine was stopped by iOS (memory). Tap to start again."))
     }
 
     // MARK: messages from the page
@@ -85,13 +129,11 @@ final class WebEngine: NSObject, WKURLSchemeHandler, WKScriptMessageHandler {
               let msg = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return }
         if msg["ready"] != nil {
             pageReady = true
-            if startPending { startPending = false; web?.evaluateJavaScript("lxStart(\(fresh))") }
+            if first != nil && !booted { boot() }
         } else if let e = msg["error"] as? String {
-            session?.webOutput(Data(("\r\n[engine] " + e.replacingOccurrences(of: "\n", with: "\r\n") + "\r\n").utf8))
+            for s in sessions.values { s.webOutput(Data(("\r\n[engine] " + e.replacingOccurrences(of: "\n", with: "\r\n") + "\r\n").utf8)) }
         } else if msg["done"] != nil {
-            let s = session
-            session = nil
-            s?.shellEnded()
+            shutDown("")
         }
     }
 
@@ -111,6 +153,13 @@ final class WebEngine: NSObject, WKURLSchemeHandler, WKScriptMessageHandler {
         if path.hasPrefix("/fs/") {
             let (status, data) = SharedFiles.shared.handle(url, body: WebEngine.body(of: task.request))
             reply(task, url, data, ["X-Lx": status])
+            return
+        }
+        if path == "/native-root.tar" {                            // the native engine's root, to start from
+            DispatchQueue.global(qos: .userInitiated).async {
+                let data = NativeRoot.tar()
+                DispatchQueue.main.async { self.reply(task, url, data) }
+            }
             return
         }
         // app files: the page, the worker, the core (web/), the Debian root (bundle root)
@@ -138,14 +187,16 @@ final class WebEngine: NSObject, WKURLSchemeHandler, WKScriptMessageHandler {
         task.didFinish()
     }
 
-    /// The terminal: the body is the guest's output; the answer carries the keys typed since,
-    /// and in headers a new size and a save request. With nothing to send, it waits up to
-    /// ?wait= ms for a key (a guest waiting for input costs no polling).
+    /// The terminals: the body is the tabs' output as frames ([u32 id][u32 length][bytes]),
+    /// X-Meta carries titles and ended sessions; the answer is the keys typed since (frames),
+    /// X-Ctl (new, resized, closed sessions) and X-Save. With nothing to send it waits up to
+    /// ?wait= ms (a guest waiting for input costs no polling).
     private func tty(_ task: WKURLSchemeTask, _ url: URL) {
-        if let out = WebEngine.body(of: task.request), !out.isEmpty { session?.webOutput(out) }
+        if let out = WebEngine.body(of: task.request), !out.isEmpty { demux(out) }
+        if let m = task.request.value(forHTTPHeaderField: "X-Meta")?.removingPercentEncoding, !m.isEmpty { meta(m) }
         if let w = waiting { waiting = nil; replyTTY(w.task, w.url) }   // (one at a time)
         let wait = Double(URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "wait" }?.value ?? "0") ?? 0
-        if !keys.isEmpty || size != nil || saveWanted || wait <= 0 { replyTTY(task, url); return }
+        if !keys.isEmpty || !ctl.isEmpty || saveWanted || wait <= 0 { replyTTY(task, url); return }
         waitID += 1
         let id = waitID
         waiting = (task, url, id)
@@ -153,6 +204,28 @@ final class WebEngine: NSObject, WKURLSchemeHandler, WKScriptMessageHandler {
             guard let self, let w = self.waiting, w.id == id else { return }
             self.waiting = nil
             self.replyTTY(w.task, w.url)
+        }
+    }
+
+    private func demux(_ d: Data) {
+        let b = [UInt8](d)
+        var i = 0
+        while i + 8 <= b.count {
+            let id = Int(UInt32(b[i]) | UInt32(b[i + 1]) << 8 | UInt32(b[i + 2]) << 16 | UInt32(b[i + 3]) << 24)
+            let n = Int(UInt32(b[i + 4]) | UInt32(b[i + 5]) << 8 | UInt32(b[i + 6]) << 16 | UInt32(b[i + 7]) << 24)
+            i += 8
+            let e = min(i + n, b.count)
+            if let s = sessions[id], e > i { s.webOutput(Data(b[i..<e])) }
+            i = e
+        }
+    }
+
+    private func meta(_ m: String) {
+        for part in m.split(separator: ";") {
+            let f = part.split(separator: " ", maxSplits: 2).map(String.init)
+            guard f.count >= 2, let id = Int(f[1]) else { continue }
+            if f[0] == "T", f.count == 3 { sessions[id]?.title = f[2] }
+            else if f[0] == "E", let s = sessions.removeValue(forKey: id) { keys[id] = nil; s.shellEnded() }
         }
     }
 
@@ -164,9 +237,15 @@ final class WebEngine: NSObject, WKURLSchemeHandler, WKScriptMessageHandler {
 
     private func replyTTY(_ task: WKURLSchemeTask, _ url: URL) {
         var extra: [String: String] = [:]
-        if let (c, r) = size { extra["X-Size"] = "\(c),\(r)"; size = nil }
+        if !ctl.isEmpty { extra["X-Ctl"] = ctl; ctl = "" }
         if saveWanted { extra["X-Save"] = "1"; saveWanted = false }
-        let data = Data(keys)
+        var data = Data()
+        for (id, k) in keys where !k.isEmpty {
+            var h = [UInt8](repeating: 0, count: 8)
+            for j in 0..<4 { h[j] = UInt8(truncatingIfNeeded: id >> (8 * j)); h[4 + j] = UInt8(truncatingIfNeeded: k.count >> (8 * j)) }
+            data.append(contentsOf: h)
+            data.append(contentsOf: k)
+        }
         keys.removeAll()
         reply(task, url, data, extra)
     }
@@ -180,6 +259,77 @@ final class WebEngine: NSObject, WKURLSchemeHandler, WKScriptMessageHandler {
         while true { let k = st.read(&buf, maxLength: buf.count); if k <= 0 { break }; out.append(buf, count: k) }
         return out
     }
+}
+
+/// The native engine's Debian (Application Support/debian) as one uncompressed tar file:
+/// the accelerated engine's first start begins from it, so what was installed before is
+/// there too. Written to Caches and handed over memory-mapped.
+enum NativeRoot {
+    static func tar() -> Data {
+        let root = Store.rootDir
+        let out = FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask)[0].appendingPathComponent("native-root.tar")
+        guard FileManager.default.fileExists(atPath: root.appendingPathComponent(".lxterm-ok").path) else { return Data() }
+        FileManager.default.createFile(atPath: out.path, contents: nil)
+        guard let h = try? FileHandle(forWritingTo: out) else { return Data() }
+        var buf = Data()
+        func flush(_ force: Bool) { if buf.count >= 1 << 20 || force { try? h.write(contentsOf: buf); buf.removeAll(keepingCapacity: true) } }
+        func header(_ name: String, _ mode: UInt32, _ size: Int, _ type: UInt8, _ link: String = "") {
+            var b = [UInt8](repeating: 0, count: 512)
+            func put(_ o: Int, _ n: Int, _ s: String) { let u = Array(s.utf8.prefix(n)); for (i, c) in u.enumerated() { b[o + i] = c } }
+            func oct(_ o: Int, _ n: Int, _ v: Int) { put(o, n - 1, String(String(v, radix: 8).suffix(n - 1)).leftPad(n - 1)) }
+            put(0, 100, name); oct(100, 8, Int(mode & 0o7777)); oct(108, 8, 0); oct(116, 8, 0)
+            oct(124, 12, size); oct(136, 12, Int(Date().timeIntervalSince1970)); for i in 148..<156 { b[i] = 32 }
+            b[156] = type; put(157, 100, link); put(257, 6, "ustar"); put(263, 2, "00")
+            let sum = b.reduce(0) { $0 + Int($1) }
+            put(148, 7, String(String(sum, radix: 8)).leftPad(6) + "\0")
+            buf.append(contentsOf: b)
+        }
+        func entry(_ name: String, _ mode: UInt32, _ data: Data?, _ type: UInt8, _ link: String = "") {
+            let nb = Array(name.utf8)
+            if nb.count > 99 {
+                header("././@LongLink", 0o644, nb.count + 1, UInt8(ascii: "L"))
+                var pad = nb + [0]; pad += [UInt8](repeating: 0, count: (512 - pad.count % 512) % 512)
+                buf.append(contentsOf: pad)
+            }
+            header(name, mode, data?.count ?? 0, type, link)
+            if let d = data, !d.isEmpty {
+                buf.append(d)
+                buf.append(contentsOf: [UInt8](repeating: 0, count: (512 - d.count % 512) % 512))
+            }
+            flush(false)
+        }
+        func walk(_ rel: String) {
+            let dir = root.path + rel
+            guard let names = try? FileManager.default.contentsOfDirectory(atPath: dir) else { return }
+            for n in names.sorted() {
+                let r = rel + "/" + n, full = root.path + r, name = String(r.dropFirst())
+                if r == "/root/Files" || r == "/.lxterm-ok" || r == "/proc" || r == "/dev" { if r != "/.lxterm-ok" { entry(name + "/", 0o755, nil, UInt8(ascii: "5")) }; continue }
+                var st = stat()
+                if lstat(full, &st) != 0 { continue }
+                let mode = UInt32(st.st_mode)
+                switch mode & UInt32(S_IFMT) {
+                case UInt32(S_IFLNK):
+                    let link = (try? FileManager.default.destinationOfSymbolicLink(atPath: full)) ?? ""
+                    entry(name, mode, nil, UInt8(ascii: "2"), link)
+                case UInt32(S_IFDIR):
+                    entry(name + "/", mode, nil, UInt8(ascii: "5"))
+                    walk(r)
+                case UInt32(S_IFREG):
+                    if let d = try? Data(contentsOf: URL(fileURLWithPath: full), options: .mappedIfSafe) { entry(name, mode, d, UInt8(ascii: "0")) }
+                default: break
+                }
+            }
+        }
+        walk("")
+        buf.append(contentsOf: [UInt8](repeating: 0, count: 1024))
+        flush(true)
+        try? h.close()
+        return (try? Data(contentsOf: out, options: .mappedIfSafe)) ?? Data()
+    }
+}
+
+private extension String {
+    func leftPad(_ n: Int) -> String { count >= n ? self : String(repeating: "0", count: n - count) + self }
 }
 
 /// TCP connections and names for the guest (lxios/webjs/netbridge.js): opened by the app with

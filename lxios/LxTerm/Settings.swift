@@ -72,7 +72,7 @@ struct SettingsView: View {
                 Section {
                     Toggle("Accelerated engine (beta)", isOn: $webEngine)
                 } footer: {
-                    Text("New tabs run Debian in WebKit's WebAssembly engine, which compiles the programs as they run: often several times faster. One tab at a time (marked ⚡); it keeps its own copy of the system. /root/Files there is the LxTerm folder in the Files app.")
+                    Text("New tabs (marked ⚡) run Debian in WebKit's WebAssembly engine, which compiles programs as they run: long jobs are several times faster. It starts from a copy of your system and keeps its own from then on.")
                 }
                 Section {
                     Button("Reset Debian…", role: .destructive) { confirmReset = true }
