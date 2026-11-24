@@ -301,6 +301,16 @@
           }
         }
       }
+    },
+    "Debian package sources": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Debian paketlerinin kaynak kodu"
+          }
+        }
+      }
     }
   }
 }

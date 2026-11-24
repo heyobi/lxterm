@@ -77,6 +77,7 @@ struct SettingsView: View {
                     Text("Debian's own arm64 programs, unmodified, run on this iPhone in a no-JIT AArch64 interpreter with a Linux system-call layer. Not affiliated with the Debian Project.")
                         .font(.footnote)
                     Link("Source code (GPL-3.0)", destination: URL(string: "https://github.com/heyobi/lxterm")!)
+                    Link("Debian package sources", destination: URL(string: "https://sources.debian.org")!)
                     Link("Privacy", destination: URL(string: "https://github.com/heyobi/lxterm/blob/main/PRIVACY.md")!)
                     NavigationLink("Licenses") { LicensesView() }
                 }

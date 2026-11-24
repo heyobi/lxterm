@@ -10,13 +10,13 @@ code copied from other projects.
 
 | Component | Where it comes from | License |
 |---|---|---|
-| xterm.js 5.5.0 and its fit addon | npm `@xterm/xterm`, `@xterm/addon-fit` | MIT (text in the app's `licenses/`) |
-| Alpine Linux aarch64 minirootfs + python3 (installed with `apk`) | dl-cdn.alpinelinux.org, SHA-256 checked (`tests/linux/fetch-alpine.sh`) | per package: busybox GPL-2.0, musl MIT, apk-tools GPL-2.0, Python PSF, … (`/lib/apk/db/installed`) |
-| Debian 13 arm64 root (`debian:trixie-slim`) + python3 (installed with `apt`) | official image on Docker Hub, digests checked (`tests/linux/fetch-debian.sh`); deb.debian.org | per package (`/usr/share/doc/*/copyright`): glibc LGPL-2.1, bash/coreutils GPL-3.0, dpkg/apt GPL-2.0, … |
+| SwiftTerm 1.18.0 (terminal view) | github.com/migueldeicaza/SwiftTerm | MIT (text in the app's `licenses/`) |
+| Debian 13 arm64 root (`debian:trixie-slim`) plus python3, procps, nano, less, curl, ca-certificates and tmux (installed with `apt`) | official image on Docker Hub, digests checked (`scripts/make-roots.sh`); packages from deb.debian.org | per package, in Debian at `/usr/share/doc/<package>/copyright`: glibc LGPL-2.1, bash/coreutils GPL-3.0, dpkg/apt GPL-2.0, Python PSF, … |
 
-Source for the distribution packages is available from the distributions
-(Alpine: git.alpinelinux.org/aports; Debian: sources.debian.org / `apt source`).
+The Debian programs are Debian's own binaries, unmodified. Their source code, for
+the exact versions shipped, is available from Debian: sources.debian.org, or
+`apt source <package>` after adding a `deb-src` line. LxTerm's own source is at
+github.com/heyobi/lxterm.
 
-Debian is a registered trademark of Software in the Public Interest, Inc.; Alpine
-Linux is a trademark of its project. LxTerm is not affiliated with or endorsed by
-either; the root file systems are their unmodified images.
+Debian is a registered trademark of Software in the Public Interest, Inc. LxTerm
+is not affiliated with or endorsed by the Debian Project.
