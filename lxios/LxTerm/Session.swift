@@ -155,11 +155,11 @@ final class Session: NSObject, ObservableObject, Identifiable, TerminalViewDeleg
     /// CI (launch argument -accel): commands typed into the accelerated shell; what it shows
     /// goes to Documents/accel.log.
     private func accelTest() {
-        let cmds = ["uname -a; head -n 2 /etc/os-release",
-                    "python3 -c 'import time; t=time.time(); s=sum(i*i for i in range(2000000)); print(\"py loop\", round(time.time()-t, 2), \"s\")'",
-                    "curl -sI https://deb.debian.org/ | head -n 1",
-                    "echo hello from Linux > /root/Files/hello.txt; ls -la /root/Files; cat /root/Files/hello.txt",
-                    "apt-get update 2>&1 | tail -n 3"]
+        let cmds = ["uname -a; head -n 2 /etc/os-release\r",
+                    "python3 -c 'import time; t=time.time(); s=sum(i*i for i in range(2000000)); print(\"py loop\", round(time.time()-t, 2), \"s\")'\r",
+                    "curl -sI https://deb.debian.org/ | head -n 1\r",
+                    "echo hello from Linux > /root/Files/hello.txt; ls -la /root/Files; cat /root/Files/hello.txt\r",
+                    "apt-get update 2>&1 | tail -n 3\r"]
         let log = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("accel.log")
         var i = 0
         Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] t in
