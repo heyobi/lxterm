@@ -59,6 +59,7 @@ final class Store: ObservableObject {
         }
         lx_engine_init(Store.rootDir.path)
         lx_engine_bind_files(SharedFiles.shared.root.path)
+        FilesDomain.register()
         phase = .ready
         let ids = UserDefaults.standard.stringArray(forKey: Store.idsKey) ?? []
         let fast = Set(UserDefaults.standard.stringArray(forKey: Store.fastKey) ?? [])

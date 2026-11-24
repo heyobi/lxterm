@@ -117,22 +117,30 @@ jobs:
         id: profile
         run: node scripts/asc.cjs profile "${{ steps.cert.outputs.serial }}" "$PROFILE_NAME"
 
+      - name: Create / fetch the File Provider extension's profile
+        id: fprofile
+        env:
+          BUNDLE_ID: com.heyobi.lxterm.files
+        run: node scripts/asc.cjs profile "${{ steps.cert.outputs.serial }}" "LxTerm Files CI AppStore"
+
       - name: Archive
         env:
           PROFILE: ${{ steps.profile.outputs.profile_name }}
+          FPROFILE: ${{ steps.fprofile.outputs.profile_name }}
         run: |
           set -o pipefail
           xcodebuild -version
           xcodebuild archive -project LxTerm.xcodeproj -scheme LxTerm -configuration Release \
             -destination 'generic/platform=iOS' -archivePath build/LxTerm.xcarchive \
             -skipPackagePluginValidation -skipMacroValidation \
-            LX_PROFILE="$PROFILE" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" > archive.log 2>&1 \
+            LX_PROFILE="$PROFILE" LX_FILES_PROFILE="$FPROFILE" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" > archive.log 2>&1 \
             || { grep -E "error:" archive.log | head -n 60 || true; tail -n 40 archive.log; exit 1; }
           tail -n 5 archive.log
 
       - name: Export signed IPA
         env:
           PROFILE: ${{ steps.profile.outputs.profile_name }}
+          FPROFILE: ${{ steps.fprofile.outputs.profile_name }}
         run: |
           set -o pipefail
           cat > build/ExportOptions.plist <<EOF
@@ -142,7 +150,7 @@ jobs:
             <key>method</key><string>app-store-connect</string>
             <key>teamID</key><string>$TEAM_ID</string>
             <key>signingStyle</key><string>manual</string>
-            <key>provisioningProfiles</key><dict><key>$BUNDLE_ID</key><string>$PROFILE</string></dict>
+            <key>provisioningProfiles</key><dict><key>$BUNDLE_ID</key><string>$PROFILE</string><key>com.heyobi.lxterm.files</key><string>$FPROFILE</string></dict>
             <key>uploadSymbols</key><false/>
           </dict></plist>
           EOF

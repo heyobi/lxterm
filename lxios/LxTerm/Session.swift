@@ -168,7 +168,7 @@ final class Session: NSObject, ObservableObject, Identifiable, TerminalViewDeleg
                     "python3 -c 'import time; t=time.time(); s=sum(i*i for i in range(2000000)); print(\"py loop\", round(time.time()-t, 2), \"s\")'\r",
                     "curl -sI https://deb.debian.org/ | head -n 1\r",
                     "echo hello from Linux > /root/Files/hello.txt; ls -la /root/Files; cat /root/Files/hello.txt\r",
-                    "(cd /root/Files && python3 -m http.server 8000 > /tmp/srv.log 2>&1 &) ; sleep 25; curl -s http://localhost:8000/ | head -n 6; cat /tmp/srv.log\r",
+                    "(cd /root/Files && python3 -m http.server 8000 > /tmp/srv.log 2>&1 &) ; for i in $(seq 40); do curl -s http://localhost:8000/ > /tmp/o && break; sleep 2; done; head -n 6 /tmp/o; cat /tmp/srv.log; time python3 -c pass\r",
                     "apt-get update 2>&1 | tail -n 3\r"]
         let log = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(tab > 1 ? "accel-\(tab).log" : "accel.log")
         var i = 0, titles = ""

@@ -1,6 +1,7 @@
 import Foundation
 import UIKit
 import WebKit
+import FileProvider
 
 /// The accelerated engine (Settings › Accelerated engine): the same core built for WebAssembly
 /// runs in a hidden WKWebView, where the JavaScript engine's JIT compiles the guest code the
@@ -498,15 +499,36 @@ final class WebNet {
     }
 }
 
-/// The folder shared with the Files app (lxios/webjs/filesbridge.js): Documents/Files is the
-/// guest's /root/Files. Paths stay inside it.
+/// The folder shared with the Files app (lxios/webjs/filesbridge.js; the native engine binds
+/// it too): every shell's /root/Files. It lives in the app group's container, where the File
+/// Provider extension (lxios/LxTermFiles) shows it as "LxTerm" in the Files app's Locations;
+/// without the group (unsigned simulator builds) it is Documents/Files. Paths stay inside it.
 final class SharedFiles {
     static let shared = SharedFiles()
+    static let group = "group.com.heyobi.lxterm"
     let root: URL = {
-        let u = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Files", isDirectory: true)
-        try? FileManager.default.createDirectory(at: u, withIntermediateDirectories: true)
+        let fm = FileManager.default
+        let docs = fm.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("Files", isDirectory: true)
+        guard let g = fm.containerURL(forSecurityApplicationGroupIdentifier: SharedFiles.group) else {
+            try? fm.createDirectory(at: docs, withIntermediateDirectories: true)
+            return docs
+        }
+        let u = g.appendingPathComponent("Files", isDirectory: true)
+        try? fm.createDirectory(at: u, withIntermediateDirectories: true)
+        if let old = try? fm.contentsOfDirectory(atPath: docs.path) {      // (where builds before 21 kept it)
+            for n in old where !fm.fileExists(atPath: u.appendingPathComponent(n).path) {
+                try? fm.moveItem(at: docs.appendingPathComponent(n), to: u.appendingPathComponent(n))
+            }
+            if (try? fm.contentsOfDirectory(atPath: docs.path))?.isEmpty == true { try? fm.removeItem(at: docs) }
+        }
         return u
     }()
+
+    /// The File Provider is told to look again (Files shows changes made from Linux).
+    static func changed() {
+        guard #available(iOS 16.0, *) else { return }
+        NSFileProviderManager(for: FilesDomain.domain)?.signalEnumerator(for: .workingSet) { _ in }
+    }
 
     private func url(_ p: String) -> URL? {
         let parts = p.split(separator: "/").map(String.init)

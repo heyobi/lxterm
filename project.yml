@@ -37,7 +37,14 @@ targets:
         type: folder
         buildPhase: resources
         optional: true
+    entitlements:
+      path: lxios/LxTerm/LxTerm.entitlements
+      properties:
+        com.apple.security.application-groups: [group.com.heyobi.lxterm]
     dependencies:
+      - target: LxTermFiles
+        embed: true
+        codeSign: true
       - package: SwiftTerm
       - sdk: libz.tbd
       - sdk: libresolv.tbd
@@ -87,6 +94,39 @@ targets:
         UISupportedInterfaceOrientations~ipad: [UIInterfaceOrientationPortrait, UIInterfaceOrientationPortraitUpsideDown, UIInterfaceOrientationLandscapeLeft, UIInterfaceOrientationLandscapeRight]
         UIApplicationSceneManifest:
           UIApplicationSupportsMultipleScenes: false
+  LxTermFiles:                      # LxTerm in the Files app's Locations (File Provider)
+    type: app-extension
+    platform: iOS
+    sources:
+      - path: lxios/LxTermFiles
+    entitlements:
+      path: lxios/LxTermFiles/LxTermFiles.entitlements
+      properties:
+        com.apple.security.application-groups: [group.com.heyobi.lxterm]
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.heyobi.lxterm.files
+        PRODUCT_NAME: LxTermFiles
+        DEVELOPMENT_TEAM: U99V9TSK2X
+        TARGETED_DEVICE_FAMILY: "1,2"
+        SWIFT_OPTIMIZATION_LEVEL: "-O"
+        IPHONEOS_DEPLOYMENT_TARGET: "17.0"
+      configs:
+        Release:
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: Apple Distribution
+          PROVISIONING_PROFILE_SPECIFIER: $(LX_FILES_PROFILE)
+    info:
+      path: lxios/LxTermFiles/Info.plist
+      properties:
+        CFBundleDisplayName: LxTerm
+        CFBundleShortVersionString: $(MARKETING_VERSION)
+        CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        NSExtension:
+          NSExtensionPointIdentifier: com.apple.fileprovider-nonui
+          NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).FileProviderExtension
+          NSExtensionFileProviderDocumentGroup: group.com.heyobi.lxterm
+          NSExtensionFileProviderSupportsEnumeration: true
 schemes:
   LxTerm:
     build:
