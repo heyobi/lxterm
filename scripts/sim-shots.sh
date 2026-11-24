@@ -22,6 +22,7 @@ xcrun simctl status_bar "$DEV" override --time "9:41" --dataNetwork wifi --wifiM
     --cellularMode active --cellularBars 4 --batteryState charged --batteryLevel 100 || true
 # no "slide to type" introduction over the keyboard
 xcrun simctl spawn "$DEV" defaults write com.apple.Preferences DidShowContinuousPathIntroduction -bool true || true
+xcrun simctl spawn "$DEV" defaults write com.apple.keyboard.ContinuousPath EnabledState -bool false || true
 APP=$(find build/dd -name LxTerm.app -path '*iphonesimulator*' | head -n 1)
 xcrun simctl uninstall "$DEV" "$BUNDLE" || true
 xcrun simctl install "$DEV" "$APP"

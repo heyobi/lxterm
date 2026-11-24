@@ -46,7 +46,7 @@ enum Tour {
         Task { @MainActor in
             guard let s = store.current else { return }
             // a font that fits fastfetch's two columns on a phone
-            Settings.fontSize = UIDevice.current.userInterfaceIdiom == .phone ? 10 : 15
+            Settings.fontSize = UIDevice.current.userInterfaceIdiom == .phone ? 12 : 20
             NotificationCenter.default.post(name: .lxFontChanged, object: nil)
             var waited = 0
             while !atPrompt(s) && waited < 120 { try? await Task.sleep(nanoseconds: 500_000_000); waited += 1 }
@@ -56,7 +56,7 @@ enum Tour {
                     UserDefaults.standard.set(t, forKey: "theme")
                     NotificationCenter.default.post(name: .lxFontChanged, object: nil)
                 }
-                if scene.keyboard { _ = s.view.becomeFirstResponder() } else { _ = s.view.resignFirstResponder() }
+                if scene.keyboard { _ = s.view.becomeFirstResponder() } else { UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil) }
                 for (keys, wait) in scene.steps {
                     for ch in keys.utf8 { s.sendKeys([ch]); try? await Task.sleep(nanoseconds: 20_000_000) }
                     try? await Task.sleep(nanoseconds: 300_000_000)
