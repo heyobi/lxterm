@@ -152,7 +152,7 @@ onmessage = async e => {
             print: s => {}, printErr: s => { if (e.data.debug) postMessage({ log: s }); }, lxPollMulti,
             preRun: [m => { m.ENV.TERM = 'xterm-256color'; m.ENV.LXRUN_QUIET = '1'; m.ENV.LANG = 'C.UTF-8';
                             m.ENV.LXRUN_MULTI = '1'; m.ENV.LXRUN_SESSION = String(e.data.id || 0);
-                            if (e.data.debug) { delete m.ENV.LXRUN_QUIET; m.ENV.LXRUN_DEBUG = '1'; } }],
+                            if (e.data.debug) { delete m.ENV.LXRUN_QUIET; m.ENV.LXRUN_DEBUG = '2'; } }],
         });
         untar(M.FS, tar, '/r');
         tar = null;
