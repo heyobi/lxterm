@@ -63,10 +63,11 @@ final class Store: ObservableObject {
         let ids = UserDefaults.standard.stringArray(forKey: Store.idsKey) ?? []
         let fast = Set(UserDefaults.standard.stringArray(forKey: Store.fastKey) ?? [])
         sessions = ids.map { Session(id: $0, accelerated: fast.contains($0)) }
-        if ProcessInfo.processInfo.arguments.contains("-accel") {     // CI: the accelerated engine
+        let args = ProcessInfo.processInfo.arguments
+        if args.contains("-accel") || args.contains("-accel2") {     // CI: the accelerated engine
             UserDefaults.standard.set(true, forKey: "webEngine")
             sessions = [Session(accelerated: true)]
-            DispatchQueue.main.asyncAfter(deadline: .now() + 175) { self.newSession() }   // a second tab in the same engine
+            if args.contains("-accel") { DispatchQueue.main.asyncAfter(deadline: .now() + 175) { self.newSession() } }   // a second tab in the same engine
         }
         if sessions.isEmpty { sessions = [Session()] }
         selected = min(UserDefaults.standard.integer(forKey: "selected"), sessions.count - 1)

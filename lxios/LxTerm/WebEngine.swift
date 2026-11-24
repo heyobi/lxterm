@@ -12,7 +12,7 @@ import WebKit
 final class WebEngine: NSObject, WKURLSchemeHandler, WKScriptMessageHandler, WKNavigationDelegate {
     static let shared = WebEngine()
     /// CI (-accel): the core's log goes to Documents/engine.log.
-    static let debug = ProcessInfo.processInfo.arguments.contains("-accel")
+    static let debug = ProcessInfo.processInfo.arguments.contains("-accel") || ProcessInfo.processInfo.arguments.contains("-accel2")
     private lazy var logFile: FileHandle? = {
         let u = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("engine.log")
         FileManager.default.createFile(atPath: u.path, contents: nil)

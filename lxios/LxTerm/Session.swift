@@ -107,7 +107,7 @@ final class Session: NSObject, ObservableObject, Identifiable, TerminalViewDeleg
             let term = view.getTerminal()
             history.removeAll()
             webID = WebEngine.shared.start(self, cols: size?.cols ?? max(term.cols, 20), rows: size?.rows ?? max(term.rows, 5))
-            if ProcessInfo.processInfo.arguments.contains("-accel") { accelTest() }
+            if ProcessInfo.processInfo.arguments.contains("-accel") || ProcessInfo.processInfo.arguments.contains("-accel2") { accelTest() }
             return
         }
         let ctx = Unmanaged.passUnretained(self).toOpaque()
@@ -163,7 +163,8 @@ final class Session: NSObject, ObservableObject, Identifiable, TerminalViewDeleg
     private func accelTest() {
         Session.accelTabs += 1
         let tab = Session.accelTabs
-        let cmds = tab > 1 ? ["echo second tab; cat /root/Files/hello.txt; sleep 8; ls /root/Files\r"] : ["uname -a; head -n 2 /etc/os-release\r",
+        let again = ProcessInfo.processInfo.arguments.contains("-accel2")   // (the second launch: is the root still there?)
+        let cmds = again ? ["echo second launch; cat /root/accel-mark; ls /root/Files\r"] : tab > 1 ? ["echo second tab; cat /root/Files/hello.txt; sleep 8; ls /root/Files\r"] : ["uname -a; head -n 2 /etc/os-release; date > /root/accel-mark\r",
                     "python3 -c 'import time; t=time.time(); s=sum(i*i for i in range(2000000)); print(\"py loop\", round(time.time()-t, 2), \"s\")'\r",
                     "curl -sI https://deb.debian.org/ | head -n 1\r",
                     "echo hello from Linux > /root/Files/hello.txt; ls -la /root/Files; cat /root/Files/hello.txt\r",
