@@ -11,6 +11,13 @@ import WebKit
 /// is Documents/Files, seen in the Files app); everything else comes from the app bundle.
 final class WebEngine: NSObject, WKURLSchemeHandler, WKScriptMessageHandler, WKNavigationDelegate {
     static let shared = WebEngine()
+    /// CI (-accel): the core's log goes to Documents/engine.log.
+    static let debug = ProcessInfo.processInfo.arguments.contains("-accel")
+    private lazy var logFile: FileHandle? = {
+        let u = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("engine.log")
+        FileManager.default.createFile(atPath: u.path, contents: nil)
+        return try? FileHandle(forWritingTo: u)
+    }()
 
     private var web: WKWebView?
     private var pageReady = false, booted = false
@@ -53,7 +60,7 @@ final class WebEngine: NSObject, WKURLSchemeHandler, WKScriptMessageHandler, WKN
         UserDefaults.standard.removeObject(forKey: "webFresh")
         booted = true
         ctl = "S \(f.id) \(f.cols) \(f.rows);" + ctl
-        web?.evaluateJavaScript("lxStart(\(fresh), \(f.id))")
+        web?.evaluateJavaScript("lxStart(\(fresh), \(f.id), \(WebEngine.debug))")
     }
 
     func input(_ s: Session, _ bytes: [UInt8]) {
@@ -127,7 +134,9 @@ final class WebEngine: NSObject, WKURLSchemeHandler, WKScriptMessageHandler, WKN
     func userContentController(_ c: WKUserContentController, didReceive m: WKScriptMessage) {
         guard let s = m.body as? String, let d = s.data(using: .utf8),
               let msg = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return }
-        if msg["ready"] != nil {
+        if let l = msg["log"] as? String {
+            try? logFile?.write(contentsOf: Data((l + "\n").utf8))
+        } else if msg["ready"] != nil {
             pageReady = true
             if first != nil && !booted { boot() }
         } else if let e = msg["error"] as? String {
@@ -366,11 +375,56 @@ final class WebNet {
         return (-1, why)
     }
 
+    private var listeners = Set<Int>()
+
+    /// A listening socket on the phone for a guest server (0.0.0.0 or 127.0.0.1, port 0: any).
+    private static func listenOn(_ host: String, _ port: Int, _ backlog: Int32) -> (Int32, Int, String) {
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        if fd < 0 { return (-1, 0, "err") }
+        var one: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &one, socklen_t(MemoryLayout<Int32>.size))
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
+        var sa = sockaddr_in()
+        sa.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        sa.sin_family = sa_family_t(AF_INET)
+        sa.sin_port = in_port_t(UInt16(clamping: port).bigEndian)
+        sa.sin_addr.s_addr = inet_addr(host == "localhost" ? "127.0.0.1" : host)
+        if sa.sin_addr.s_addr == INADDR_NONE { sa.sin_addr.s_addr = INADDR_ANY }
+        let ok = withUnsafePointer(to: &sa) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) } }
+        if ok != 0 || listen(fd, backlog) != 0 {
+            let why = errno == EADDRINUSE ? "inuse" : errno == EACCES ? "acces" : "err"
+            close(fd)
+            return (-1, 0, why)
+        }
+        _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
+        var len = socklen_t(MemoryLayout<sockaddr_in>.size)
+        _ = withUnsafeMutablePointer(to: &sa) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { getsockname(fd, $0, &len) } }
+        return (fd, Int(UInt16(bigEndian: sa.sin_port)), "ok")
+    }
+
     func handle(_ url: URL, body: Data?, reply: @escaping (String, Data) -> Void) {
         let q = URLComponents(url: url, resolvingAgainstBaseURL: false)?.queryItems ?? []
         func arg(_ n: String) -> String? { q.first { $0.name == n }?.value }
         let id = Int(arg("id") ?? "") ?? 0
         switch url.path {
+        case "/net/listen":
+            let (fd, port, why) = WebNet.listenOn(arg("host") ?? "0.0.0.0", Int(arg("port") ?? "") ?? 0, Int32(arg("backlog") ?? "") ?? 16)
+            if fd < 0 { reply(why, Data()); return }
+            let n = nextID; nextID += 1
+            conns[n] = fd
+            listeners.insert(n)
+            reply("ok", Data("\(n) \(port)".utf8))
+        case "/net/accept":
+            guard let lfd = conns[id], listeners.contains(id) else { reply("err", Data()); return }
+            var sa = sockaddr_in(), len = socklen_t(MemoryLayout<sockaddr_in>.size)
+            let fd = withUnsafeMutablePointer(to: &sa) { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { accept(lfd, $0, &len) } }
+            if fd < 0 { reply(errno == EAGAIN || errno == EWOULDBLOCK ? "again" : "err", Data()); return }
+            var one: Int32 = 1
+            setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &one, socklen_t(MemoryLayout<Int32>.size))
+            _ = fcntl(fd, F_SETFL, fcntl(fd, F_GETFL) | O_NONBLOCK)
+            let n = nextID; nextID += 1
+            conns[n] = fd
+            reply("ok", Data("\(n) \(String(cString: inet_ntoa(sa.sin_addr))) \(UInt16(bigEndian: sa.sin_port))".utf8))
         case "/net/connect":
             let host = arg("host") ?? "", port = Int(arg("port") ?? "") ?? 0
             DispatchQueue.global().async {
@@ -416,6 +470,9 @@ final class WebNet {
                 }
             }
             reply(ok && sent == data.count ? "ok" : "err", Data(String(sent).utf8))
+        case "/net/poll" where listeners.contains(id):
+            var pf = pollfd(fd: conns[id] ?? -1, events: Int16(POLLIN), revents: 0)
+            reply(poll(&pf, 1, 0) > 0 && pf.revents & Int16(POLLIN) != 0 ? "data" : "again", Data())
         case "/net/recv", "/net/poll":
             guard let fd = conns[id] else { reply("err", Data()); return }
             let peek = url.path == "/net/poll"
@@ -433,6 +490,7 @@ final class WebNet {
             reply("ok", Data(String(max(n, 0)).utf8))
         case "/net/close":
             if let fd = conns.removeValue(forKey: id) { close(fd) }
+            listeners.remove(id)
             reply("ok", Data())
         default:
             reply("err", Data())

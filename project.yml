@@ -72,6 +72,13 @@ targets:
         ITSAppUsesNonExemptEncryption: false
         NSLocalNetworkUsageDescription: Programs you run in Debian (curl, apt, ssh, a web server) can connect to devices on your network.
         UIFileSharingEnabled: true
+        NSAppTransportSecurity:
+          NSAllowsLocalNetworking: true       # the in-app browser opens servers running in Debian (http://localhost)
+        CFBundleDocumentTypes:
+          - CFBundleTypeName: Any file
+            CFBundleTypeRole: Viewer
+            LSHandlerRank: Alternate
+            LSItemContentTypes: [public.data, public.content, public.item]
         LSSupportsOpeningDocumentsInPlace: true
         UILaunchScreen:
           UIColorName: LaunchColor

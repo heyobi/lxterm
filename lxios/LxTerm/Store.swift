@@ -66,7 +66,7 @@ final class Store: ObservableObject {
         if ProcessInfo.processInfo.arguments.contains("-accel") {     // CI: the accelerated engine
             UserDefaults.standard.set(true, forKey: "webEngine")
             sessions = [Session(accelerated: true)]
-            DispatchQueue.main.asyncAfter(deadline: .now() + 140) { self.newSession() }   // a second tab in the same engine
+            DispatchQueue.main.asyncAfter(deadline: .now() + 175) { self.newSession() }   // a second tab in the same engine
         }
         if sessions.isEmpty { sessions = [Session()] }
         selected = min(UserDefaults.standard.integer(forKey: "selected"), sessions.count - 1)
@@ -116,6 +116,31 @@ final class Store: ObservableObject {
             for s in list { s.save() }
             DispatchQueue.main.async { app.endBackgroundTask(task) }
         }
+    }
+
+    /// A file shared with LxTerm (share sheet, Files' "Open in"): copied into the shared
+    /// folder, /root/Files in every shell; the shown terminal says where it is.
+    func receive(_ url: URL) {
+        guard url.isFileURL else { return }
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        let fm = FileManager.default
+        let dir = SharedFiles.shared.root
+        var dest = dir.appendingPathComponent(url.lastPathComponent)
+        if url.standardizedFileURL.path.hasPrefix(dir.standardizedFileURL.path) { dest = url }   // already there
+        else {
+            var n = 2
+            let base = url.deletingPathExtension().lastPathComponent, ext = url.pathExtension
+            while fm.fileExists(atPath: dest.path) {
+                dest = dir.appendingPathComponent(ext.isEmpty ? "\(base) \(n)" : "\(base) \(n).\(ext)")
+                n += 1
+            }
+            do { try fm.copyItem(at: url, to: dest) } catch {
+                current?.notice(String(localized: "Could not copy the file: \(error.localizedDescription)"))
+                return
+            }
+        }
+        current?.notice(String(localized: "File received: /root/Files/\(dest.lastPathComponent)"))
     }
 
     /// Erases Debian and unpacks it again (Settings › Reset).

@@ -12,6 +12,7 @@ struct LxTermApp: App {
                 .environmentObject(store)
                 .onAppear { store.boot() }
                 .onChange(of: phase) { _, p in if p == .background { store.saveAll() } }
+                .onOpenURL { url in store.receive(url) }
         }
     }
 }
@@ -62,11 +63,12 @@ struct MainView: View {
     @EnvironmentObject var store: Store
     @State private var showSettings = false
     @State private var themeTick = 0
+    @State private var browser: BrowserPage?
 
     var body: some View {
         let theme = Theme.current
         VStack(spacing: 0) {
-            TabStrip(showSettings: $showSettings)
+            TabStrip(showSettings: $showSettings, browser: $browser)
             GeometryReader { proxy in
                 let fold = foldFrame(proxy)
                 if let fold, fold.width > fold.height {                // laptop: above the fold
@@ -87,6 +89,10 @@ struct MainView: View {
         .background(Color(theme.background).ignoresSafeArea())
         .preferredColorScheme(theme.isDark ? .dark : .light)
         .sheet(isPresented: $showSettings) { SettingsView().environmentObject(store) }
+        .fullScreenCover(item: $browser) { BrowserView(url: $0.url) }
+        .onReceive(NotificationCenter.default.publisher(for: .lxOpenBrowser)) { n in
+            if let u = n.object as? URL { browser = BrowserPage(url: BrowserView.local(u) ?? u) }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .lxFontChanged)) { _ in
             for s in store.sessions { s.applySettings() }
             themeTick += 1
@@ -115,6 +121,7 @@ struct MainView: View {
 struct TabStrip: View {
     @EnvironmentObject var store: Store
     @Binding var showSettings: Bool
+    @Binding var browser: BrowserPage?
 
     var body: some View {
         HStack(spacing: 8) {
@@ -131,6 +138,8 @@ struct TabStrip: View {
                 if let v = store.current?.view { _ = v.isFirstResponder ? v.resignFirstResponder() : v.becomeFirstResponder() }
             } label: { Image(systemName: "keyboard") }
                 .accessibilityLabel(Text("Show or hide the keyboard"))
+            Button { browser = BrowserPage(url: URL(string: "http://localhost:8000")!) } label: { Image(systemName: "globe") }
+                .accessibilityLabel(Text("Browser for servers in Debian"))
             Button { store.newSession() } label: { Image(systemName: "plus") }
                 .accessibilityLabel(Text("New shell"))
             Button { showSettings = true } label: { Image(systemName: "gearshape") }

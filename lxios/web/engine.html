@@ -5,6 +5,6 @@
 const w = new Worker('engine.js');
 w.onmessage = e => webkit.messageHandlers.engine.postMessage(JSON.stringify(e.data));
 w.onerror = e => webkit.messageHandlers.engine.postMessage(JSON.stringify({ error: e.message }));
-window.lxStart = (fresh, id) => w.postMessage({ start: true, fresh: !!fresh, id: id });
+window.lxStart = (fresh, id, debug) => w.postMessage({ start: true, fresh: !!fresh, id: id, debug: !!debug });
 webkit.messageHandlers.engine.postMessage(JSON.stringify({ ready: true }));
 </script>

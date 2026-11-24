@@ -148,6 +148,11 @@ final class Session: NSObject, ObservableObject, Identifiable, TerminalViewDeleg
         }
     }
 
+    /// A line from the app (dimmed), shown in the terminal without reaching the shell.
+    func notice(_ text: String) {
+        view.feed(text: "\r\n\u{1b}[2m[" + text + "]\u{1b}[0m\r\n")
+    }
+
     /// Output of the accelerated engine.
     func webOutput(_ d: Data) {
         d.withUnsafeBytes { p in if let b = p.baseAddress, p.count > 0 { output(b, p.count) } }
@@ -162,6 +167,7 @@ final class Session: NSObject, ObservableObject, Identifiable, TerminalViewDeleg
                     "python3 -c 'import time; t=time.time(); s=sum(i*i for i in range(2000000)); print(\"py loop\", round(time.time()-t, 2), \"s\")'\r",
                     "curl -sI https://deb.debian.org/ | head -n 1\r",
                     "echo hello from Linux > /root/Files/hello.txt; ls -la /root/Files; cat /root/Files/hello.txt\r",
+                    "(cd /root/Files && python3 -m http.server 8000 > /tmp/srv.log 2>&1 &) ; sleep 8; curl -s http://localhost:8000/ | head -n 6; cat /tmp/srv.log\r",
                     "apt-get update 2>&1 | tail -n 3\r"]
         let log = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent(tab > 1 ? "accel-\(tab).log" : "accel.log")
         var i = 0, titles = ""
@@ -277,7 +283,9 @@ final class Session: NSObject, ObservableObject, Identifiable, TerminalViewDeleg
     }
 
     func requestOpenLink(source: TerminalView, link: String, params: [String: String]) {
-        if let u = URL(string: link), ["http", "https"].contains(u.scheme ?? "") { UIApplication.shared.open(u) }
+        guard let u = URL(string: link), ["http", "https"].contains(u.scheme ?? "") else { return }
+        if BrowserView.isLocal(u) { NotificationCenter.default.post(name: .lxOpenBrowser, object: u) }   // a server in Debian
+        else { UIApplication.shared.open(u) }
     }
 }
 

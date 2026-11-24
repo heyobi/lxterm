@@ -341,6 +341,46 @@
           }
         }
       }
+    },
+    "Could not copy the file: %@": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dosya kopyalanamadı: %@"
+          }
+        }
+      }
+    },
+    "File received: /root/Files/%@": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dosya alındı: /root/Files/%@"
+          }
+        }
+      }
+    },
+    "Browser for servers in Debian": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Debian'daki sunucular için tarayıcı"
+          }
+        }
+      }
+    },
+    "Reload": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yenile"
+          }
+        }
+      }
     }
   }
 }
