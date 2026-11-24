@@ -1,0 +1,10 @@
+<!doctype html>
+<meta charset="utf-8">
+<script>
+// LxTerm's accelerated engine: starts the worker (engine.js) and reports to the app.
+const w = new Worker('engine.js');
+w.onmessage = e => webkit.messageHandlers.engine.postMessage(JSON.stringify(e.data));
+w.onerror = e => webkit.messageHandlers.engine.postMessage(JSON.stringify({ error: e.message }));
+window.lxStart = fresh => w.postMessage({ start: true, fresh: !!fresh });
+webkit.messageHandlers.engine.postMessage(JSON.stringify({ ready: true }));
+</script>

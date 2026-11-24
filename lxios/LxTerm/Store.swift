@@ -16,6 +16,7 @@ final class Store: ObservableObject {
     static let sessionsDir = support.appendingPathComponent("sessions", isDirectory: true)
     private static let okFile = rootDir.appendingPathComponent(".lxterm-ok")
     private static let idsKey = "sessionIDs"
+    private static let fastKey = "acceleratedIDs"
 
     var current: Session? { sessions.indices.contains(selected) ? sessions[selected] : nil }
 
@@ -59,15 +60,27 @@ final class Store: ObservableObject {
         lx_engine_init(Store.rootDir.path)
         phase = .ready
         let ids = UserDefaults.standard.stringArray(forKey: Store.idsKey) ?? []
-        sessions = ids.map { Session(id: $0) }
+        let fast = Set(UserDefaults.standard.stringArray(forKey: Store.fastKey) ?? [])
+        sessions = ids.map { Session(id: $0, accelerated: fast.contains($0)) }
+        if ProcessInfo.processInfo.arguments.contains("-accel") {     // CI: the accelerated engine
+            UserDefaults.standard.set(true, forKey: "webEngine")
+            sessions = [Session(accelerated: true)]
+        }
         if sessions.isEmpty { sessions = [Session()] }
         selected = min(UserDefaults.standard.integer(forKey: "selected"), sessions.count - 1)
         persist()
         if ProcessInfo.processInfo.arguments.contains("-shots") { Tour.run(self) }
     }
 
+    /// A new tab runs in the accelerated engine when Settings › Accelerated engine is on and
+    /// no other tab uses it (the engine runs one shell).
+    private func makeSession() -> Session {
+        let fast = UserDefaults.standard.bool(forKey: "webEngine") && !sessions.contains { $0.accelerated }
+        return Session(accelerated: fast)
+    }
+
     func newSession() {
-        sessions.append(Session())
+        sessions.append(makeSession())
         selected = sessions.count - 1
         persist()
     }
@@ -76,7 +89,7 @@ final class Store: ObservableObject {
         guard let i = sessions.firstIndex(where: { $0 === s }) else { return }
         s.close()
         sessions.remove(at: i)
-        if sessions.isEmpty { sessions = [Session()] }
+        if sessions.isEmpty { sessions = [makeSession()] }
         selected = min(selected, sessions.count - 1)
         persist()
     }
@@ -88,6 +101,7 @@ final class Store: ObservableObject {
 
     private func persist() {
         UserDefaults.standard.set(sessions.map(\.id), forKey: Store.idsKey)
+        UserDefaults.standard.set(sessions.filter(\.accelerated).map(\.id), forKey: Store.fastKey)
         UserDefaults.standard.set(selected, forKey: "selected")
     }
 
@@ -112,6 +126,8 @@ final class Store: ObservableObject {
         try? FileManager.default.removeItem(at: Store.sessionsDir)
         try? FileManager.default.createDirectory(at: Store.sessionsDir, withIntermediateDirectories: true)
         UserDefaults.standard.removeObject(forKey: Store.idsKey)
+        UserDefaults.standard.removeObject(forKey: Store.fastKey)
+        WebEngine.resetRoot()
         unpack()
     }
 }

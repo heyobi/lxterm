@@ -30,6 +30,9 @@ targets:
       - path: rootfs-debian.tar.gz
         buildPhase: resources
         optional: true
+      - path: lxios/web            # the accelerated engine (WebEngine.swift): page, worker, lxweb.js/.wasm (scripts/build-web.sh)
+        type: folder
+        buildPhase: resources
       - path: licenses
         type: folder
         buildPhase: resources
@@ -67,6 +70,7 @@ targets:
         LSRequiresIPhoneOS: true
         LSApplicationCategoryType: public.app-category.developer-tools
         ITSAppUsesNonExemptEncryption: false
+        NSLocalNetworkUsageDescription: Programs you run in Debian (curl, apt, ssh, a web server) can connect to devices on your network.
         UIFileSharingEnabled: true
         LSSupportsOpeningDocumentsInPlace: true
         UILaunchScreen:

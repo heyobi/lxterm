@@ -311,6 +311,26 @@
           }
         }
       }
+    },
+    "Accelerated engine (beta)": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hızlandırılmış motor (beta)"
+          }
+        }
+      }
+    },
+    "New tabs run Debian in WebKit's WebAssembly engine, which compiles the programs as they run: often several times faster. One tab at a time (marked ⚡); it keeps its own copy of the system. /root/Files there is the LxTerm folder in the Files app.": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yeni sekmeler Debian'ı WebKit'in WebAssembly motorunda çalıştırır; programlar çalışırken derlenir, çoğu zaman birkaç kat daha hızlıdır. Aynı anda bir sekme (⚡ ile işaretli); sistemin kendi kopyasını tutar. Oradaki /root/Files, Dosyalar uygulamasındaki LxTerm klasörüdür."
+          }
+        }
+      }
     }
   }
 }

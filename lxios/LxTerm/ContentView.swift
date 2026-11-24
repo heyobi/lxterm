@@ -151,7 +151,7 @@ struct TabChip: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Image(systemName: session.exited ? "stop.circle" : "terminal").font(.caption)
+            Image(systemName: session.exited ? "stop.circle" : session.accelerated ? "bolt.fill" : "terminal").font(.caption)
             Text(session.title).font(.subheadline.weight(selected ? .semibold : .regular)).lineLimit(1)
             if selected {
                 Button(action: close) { Image(systemName: "xmark").font(.caption2.bold()) }

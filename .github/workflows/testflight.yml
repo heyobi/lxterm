@@ -18,6 +18,17 @@ env:
   PROFILE_NAME: LxTerm CI AppStore
 
 jobs:
+  web:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: mymindstorm/setup-emsdk@v14
+        with: { version: latest }
+      - run: sh scripts/build-web.sh
+      - uses: actions/upload-artifact@v4
+        with: { name: web, path: "lxios/web/lxweb.*", retention-days: 7 }
+
   roots:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 60
@@ -54,7 +65,7 @@ jobs:
         run: node scripts/asc.cjs next-build-number "${{ steps.app.outputs.app_id }}" "${{ github.run_number }}"
 
   build:
-    needs: [roots, prepare]
+    needs: [roots, prepare, web]
     runs-on: xcode-27
     timeout-minutes: 45
     env:
@@ -68,6 +79,8 @@ jobs:
         with: { node-version: 22 }
       - uses: actions/download-artifact@v4
         with: { name: rootfs }
+      - uses: actions/download-artifact@v4
+        with: { name: web, path: lxios/web }
       - name: Licenses and Xcode project
         run: |
           mkdir -p licenses && cp LICENSE NOTICE.md licenses/

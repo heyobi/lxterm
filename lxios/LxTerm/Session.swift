@@ -7,6 +7,10 @@ import UIKit
 /// session resumed from its snapshot shows what it showed before.
 final class Session: NSObject, ObservableObject, Identifiable, TerminalViewDelegate {
     let id: String
+    /// Runs in the accelerated engine (WebEngine: WebAssembly in WebKit, JIT-compiled) instead
+    /// of the interpreter. Its root is the engine's own copy, kept by the engine.
+    let accelerated: Bool
+    private var webRunning = false
     @Published var title = "bash"
     @Published var exited = false
     private(set) var handle: OpaquePointer?
@@ -22,8 +26,9 @@ final class Session: NSObject, ObservableObject, Identifiable, TerminalViewDeleg
     private var history = [UInt8]()              // the last output, replayed on resume
     private static let historyMax = 256 * 1024
 
-    init(id: String = UUID().uuidString) {
+    init(id: String = UUID().uuidString, accelerated: Bool = false) {
         self.id = id
+        self.accelerated = accelerated
         super.init()
     }
 
@@ -60,9 +65,10 @@ final class Session: NSObject, ObservableObject, Identifiable, TerminalViewDeleg
     /// Keys from the key bar (Ctrl applies to them too).
     func sendKeys(_ bytes: [UInt8]) {
         if exited { restart(); return }
-        guard let handle else { return }
         var b = bytes
         if ctrlArmed, b.count == 1 { b = [Session.ctrl(b[0])]; ctrlArmed = false; keyBar?.updateCtrl() }
+        if webRunning { WebEngine.shared.input(b); return }
+        guard let handle else { return }
         b.withUnsafeBufferPointer { p in
             p.baseAddress?.withMemoryRebound(to: CChar.self, capacity: p.count) { lx_session_input(handle, $0, p.count) }
         }
@@ -93,8 +99,16 @@ final class Session: NSObject, ObservableObject, Identifiable, TerminalViewDeleg
 
     /// Starts the shell (resumed from its snapshot when there is one).
     func start() {
-        guard handle == nil else { return }
+        guard handle == nil, !webRunning else { return }
         exited = false
+        if accelerated {
+            let term = view.getTerminal()
+            history.removeAll()
+            webRunning = true
+            WebEngine.shared.start(self, cols: size?.cols ?? max(term.cols, 20), rows: size?.rows ?? max(term.rows, 5))
+            if ProcessInfo.processInfo.arguments.contains("-accel") { accelTest() }
+            return
+        }
         let ctx = Unmanaged.passUnretained(self).toOpaque()
         var res: Int32 = 0
         let term = view.getTerminal()
@@ -133,6 +147,29 @@ final class Session: NSObject, ObservableObject, Identifiable, TerminalViewDeleg
         }
     }
 
+    /// Output of the accelerated engine.
+    func webOutput(_ d: Data) {
+        d.withUnsafeBytes { p in if let b = p.baseAddress, p.count > 0 { output(b, p.count) } }
+    }
+
+    /// CI (launch argument -accel): commands typed into the accelerated shell; what it shows
+    /// goes to Documents/accel.log.
+    private func accelTest() {
+        let cmds = ["uname -a; head -n 2 /etc/os-release",
+                    "python3 -c 'import time; t=time.time(); s=sum(i*i for i in range(2000000)); print(\"py loop\", round(time.time()-t, 2), \"s\")'",
+                    "curl -sI https://deb.debian.org/ | head -n 1",
+                    "echo hello from Linux > /root/Files/hello.txt; ls -la /root/Files; cat /root/Files/hello.txt",
+                    "apt-get update 2>&1 | tail -n 3"]
+        let log = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("accel.log")
+        var i = 0
+        Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] t in
+            guard let self else { t.invalidate(); return }
+            i += 1
+            try? Data(self.tail(64 * 1024).utf8).write(to: log)
+            if i >= 20, i % 25 == 20, (i - 20) / 25 < cmds.count { WebEngine.shared.input(Array(cmds[(i - 20) / 25].utf8)) }
+        }
+    }
+
     private func output(_ p: UnsafeRawPointer, _ n: Int) {
         let bytes = UnsafeRawBufferPointer(start: p, count: n)
         lock.lock()
@@ -165,8 +202,9 @@ final class Session: NSObject, ObservableObject, Identifiable, TerminalViewDeleg
         if t != title { title = t }
     }
 
-    private func shellEnded() {
+    func shellEnded() {
         handle = nil
+        webRunning = false
         exited = true
         try? FileManager.default.removeItem(atPath: snapPath)
         view.feed(text: "\r\n\u{1b}[2m" + String(localized: "[the shell has ended — tap to start a new one]") + "\u{1b}[0m\r\n")
@@ -180,6 +218,7 @@ final class Session: NSObject, ObservableObject, Identifiable, TerminalViewDeleg
     /// Saves the shell to its snapshot (and what it showed). 0 saved, 1 busy, -1 failed.
     @discardableResult
     func save() -> Int32 {
+        if webRunning { DispatchQueue.main.async { WebEngine.shared.save() }; return 0 }
         guard let handle else { return -1 }
         let r = lx_session_save(handle)
         if r == 0 {
@@ -192,6 +231,7 @@ final class Session: NSObject, ObservableObject, Identifiable, TerminalViewDeleg
     }
 
     func close() {
+        if webRunning { WebEngine.shared.stop(); webRunning = false }
         if let handle { lx_session_close(handle) }
         handle = nil
         try? FileManager.default.removeItem(atPath: snapPath)
@@ -208,6 +248,7 @@ final class Session: NSObject, ObservableObject, Identifiable, TerminalViewDeleg
     func send(source: TerminalView, data: ArraySlice<UInt8>) {
         if exited { restart(); return }
         if ctrlArmed, data.count == 1 { sendKeys([data[data.startIndex]]); return }
+        if webRunning { WebEngine.shared.input(Array(data)); return }
         guard let handle else { return }
         data.withUnsafeBufferPointer { b in
             b.baseAddress?.withMemoryRebound(to: CChar.self, capacity: b.count) { lx_session_input(handle, $0, b.count) }
@@ -216,6 +257,7 @@ final class Session: NSObject, ObservableObject, Identifiable, TerminalViewDeleg
 
     func sizeChanged(source: TerminalView, newCols: Int, newRows: Int) {
         size = (newCols, newRows)
+        if webRunning { WebEngine.shared.resize(cols: newCols, rows: newRows) }
         if let handle { lx_session_resize(handle, Int32(newCols), Int32(newRows)) }
     }
 

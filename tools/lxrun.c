@@ -13,6 +13,7 @@
  * -i: the guest gets a terminal (core/tty.c, as the iOS app's view): the host's own
  * terminal in raw mode, or, with LXRUN_KEYS, typed keys from a script: C escapes
  * (\r Enter, \x03 Ctrl-C, \e Esc, \t) and \w for a one-second pause. */
+#include "../core/jit.h"
 #include "../core/proc.h"
 #include "../core/tty.h"
 
@@ -31,9 +32,49 @@ static struct aoi_proc proc;
 static struct termios saved_tio;
 static int raw_tty;
 
+#ifdef __EMSCRIPTEN__
+/* In a web view (tests/wasm/web): the terminal's output collects in JavaScript and the
+ * scheduler's host turn (aoi_host_poll) sends it to the app and brings back the keys. */
+#include <emscripten.h>
+EM_JS(void, js_tty_out, (const char *s, int n), {
+    if (!Module.lxOut) Module.lxOut = [];
+    Module.lxOut.push(HEAPU8.slice(s, s + n));
+});
+EM_JS(int, js_tty_poll, (char *buf, int max, int wait_ms), {
+    if (!Module.lxPoll) return 0;
+    var out = Module.lxOut || [];
+    Module.lxOut = [];
+    var r = Module.lxPoll(out, wait_ms);
+    if (!r || !r.length) return 0;
+    var n = Math.min(r.length, max);
+    HEAPU8.set(r.subarray(0, n), buf);
+    return n;
+});
+/* a new window size from the host (Module.lxSize = [cols, rows]), once */
+EM_JS(int, js_tty_size, (int *cols, int *rows), {
+    var z = Module.lxSize;
+    if (!z) return 0;
+    Module.lxSize = null;
+    HEAP32[cols >> 2] = z[0]; HEAP32[rows >> 2] = z[1];
+    return 1;
+});
+static void web_poll(int64_t wait_ns)
+{
+    char b[4096];
+    int cols, rows;
+    int n = js_tty_poll(b, (int)sizeof b, (int)(wait_ns / 1000000));
+    if (js_tty_size(&cols, &rows)) aoi_tty_resize(aoi_console, cols, rows);
+    if (n > 0) { aoi_tty_input(aoi_console, b, (size_t)n); aoi_wake_seq++; }
+}
+#endif
+
 static void tty_out(void *ctx, const char *s, size_t n)
 {
     (void)ctx;
+#ifdef __EMSCRIPTEN__
+    js_tty_out(s, (int)n);
+    return;
+#endif
     while (n) {
         ssize_t k = write(1, s, n);
         if (k <= 0) break;
@@ -97,6 +138,8 @@ static long peak_rss_mib(void)
 #endif
 }
 
+extern uint64_t aoi_syscall_count;
+
 int main(int argc, char **argv)
 {
     static const char *base_env[] = {
@@ -105,6 +148,10 @@ int main(int argc, char **argv)
     const char *envp[80], *cwd = "/root", *err;
     char term[64];
     int ne = 0, a = 1, trace = 0, quiet = getenv("LXRUN_QUIET") != NULL, use_tty = 0;
+#ifdef AOI_JIT
+    if (getenv("AOI_JIT") && !atoi(getenv("AOI_JIT"))) aoi_jit_enabled = 0;   /* AOI_JIT=0: interpreter only */
+    if (getenv("AOI_JIT_HOT")) aoi_jit_hot = atoi(getenv("AOI_JIT_HOT"));
+#endif
     enum aoi_stop st;
     double t0, t1;
     while (base_env[ne]) { envp[ne] = base_env[ne]; ne++; }
@@ -144,6 +191,14 @@ int main(int argc, char **argv)
             setrlimit(RLIMIT_NOFILE, &rl);
         }
     }
+#ifdef __EMSCRIPTEN__
+    if (use_tty) {                                   /* no host terminal or threads: the host turn */
+        aoi_tty_new(tty_out, NULL, 80, 24);
+        aoi_proc_attach_tty(&proc);
+        aoi_host_poll = web_poll;
+        use_tty = 0;
+    }
+#endif
     if (use_tty) {
         pthread_t th;
         int cols = 80, rows = 24;
@@ -166,11 +221,20 @@ int main(int argc, char **argv)
     t0 = now_s();
     st = aoi_proc_run(&proc, 0);
     t1 = now_s();
+#ifdef __EMSCRIPTEN__
+    if (aoi_host_poll) aoi_host_poll(0);             /* the last output */
+#endif
     fflush(stdout);
     if (st == AOI_STOP_EXIT) {
         if (!quiet || getenv("LXRUN_STATS"))
-            fprintf(stderr, "[lxrun] exit %d, %" PRIu64 " instructions, %.2f s, peak RSS %ld MiB\n",
-                    proc.cpu.exit_code, proc.cpu.steps, t1 - t0, peak_rss_mib());
+            fprintf(stderr, "[lxrun] exit %d, %" PRIu64 " instructions, %.2f s, peak RSS %ld MiB, %" PRIu64 " syscalls (all processes)\n",
+                    proc.cpu.exit_code, proc.cpu.steps, t1 - t0, peak_rss_mib(), aoi_syscall_count);
+#ifdef AOI_JIT
+        if (!quiet || getenv("LXRUN_STATS"))
+            fprintf(stderr, "[lxrun] accelerator: %" PRIu64 " blocks translated, %" PRIu64 " refused by the engine, %" PRIu64 " reused, %" PRIu64 " region runs, %d KiB compiled in %d ms\n",
+                    aoi_jit_blocks, aoi_jit_failed, aoi_jit_reused, aoi_jit_runs, aoi_jit_kbytes(), aoi_jit_compile_ms());
+        if (getenv("LXRUN_STATS")) aoi_jit_report(stderr);
+#endif
         return proc.cpu.exit_code & 0xff;
     }
     {

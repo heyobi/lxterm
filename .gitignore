@@ -4,3 +4,5 @@ xt/
 *.ipa
 LxTerm.xcodeproj/
 licenses/
+lxios/web/lxweb.js
+lxios/web/lxweb.wasm

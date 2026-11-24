@@ -11,6 +11,16 @@
           }
         }
       }
+    },
+    "NSLocalNetworkUsageDescription": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Debian'da çalıştırdığınız programlar (curl, apt, ssh, bir web sunucusu) ağınızdaki aygıtlara bağlanabilir."
+          }
+        }
+      }
     }
   }
 }

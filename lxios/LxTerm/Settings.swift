@@ -47,6 +47,7 @@ struct SettingsView: View {
     @EnvironmentObject var store: Store
     @Environment(\.dismiss) private var dismiss
     @AppStorage("theme") private var theme = "night"
+    @AppStorage("webEngine") private var webEngine = false
     @State private var size = Settings.fontSize
     @State private var confirmReset = false
 
@@ -67,6 +68,11 @@ struct SettingsView: View {
                     }
                     .pickerStyle(.inline)
                     .labelsHidden()
+                }
+                Section {
+                    Toggle("Accelerated engine (beta)", isOn: $webEngine)
+                } footer: {
+                    Text("New tabs run Debian in WebKit's WebAssembly engine, which compiles the programs as they run: often several times faster. One tab at a time (marked ⚡); it keeps its own copy of the system. /root/Files there is the LxTerm folder in the Files app.")
                 }
                 Section {
                     Button("Reset Debian…", role: .destructive) { confirmReset = true }
