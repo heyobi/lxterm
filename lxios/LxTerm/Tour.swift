@@ -83,7 +83,7 @@ enum Tour {
             }
             DistroManager.shared.refresh()
             // fastfetch without the host's disk and memory lines
-            let cfg = "mkdir -p ~/.config/fastfetch && echo '{\"modules\":[\"title\",\"separator\",\"os\",\"kernel\",\"packages\",\"shell\",\"terminal\",\"cpu\",\"locale\",\"break\",\"colors\"]}' > ~/.config/fastfetch/config.jsonc\r"
+            let cfg = "mkdir -p ~/.config/fastfetch && echo '{\"logo\":{\"type\":\"small\"},\"modules\":[\"title\",\"separator\",\"os\",\"kernel\",\"packages\",\"shell\",\"terminal\",\"cpu\",\"locale\",\"break\",\"colors\"]}' > ~/.config/fastfetch/config.jsonc\r"
 
             // 1. Arch Linux ARM: its setup runs in the first tab, then pacman installs fastfetch
             if let arch = await open(store, Distro.named("arch")) {
@@ -94,7 +94,7 @@ enum Tour {
                 await waitPrompt(arch)
                 await type(arch, "pacman -S --noconfirm fastfetch > /dev/null 2>&1\r", max: 900)
                 await type(arch, cfg)
-                await type(arch, "clear; fastfetch\r")
+                await type(arch, "printf '\\033[H\\033[2J\\033[3J'; fastfetch\r")
                 hideKeyboard(arch)
                 await shot("arch")
             }
@@ -108,8 +108,8 @@ enum Tour {
             // 3. Ubuntu: apt, in Ubuntu's colours (iPad: beside Arch)
             if !phone { UserDefaults.standard.set(true, forKey: "split") }
             if let ub = await open(store, Distro.named("ubuntu")) {
-                await type(ub, "apt-get update > /dev/null 2>&1; apt-get install -y --no-install-recommends cowsay 2>&1 | tail -n 3\r", max: 900)
-                await type(ub, "clear; head -n 2 /etc/os-release; /usr/games/cowsay -f tux 'apt works on iPhone'\r")
+                await type(ub, "apt-get update > /dev/null 2>&1; apt-get install -y --no-install-recommends figlet > /tmp/apt.log 2>&1; tail -n 2 /tmp/apt.log\r", max: 900)
+                await type(ub, "clear; head -n 1 /etc/os-release; apt install -y figlet 2>&1 | tail -n 1; figlet -w 44 Ubuntu\r")
                 hideKeyboard(ub)
                 await shot("ubuntu")
             }
@@ -123,7 +123,8 @@ enum Tour {
             await sleep(8)
             await type(deb, "clear; ls /root/Files/Examples\r")
             hideKeyboard(deb)
-            Ports.shared.scan()
+            var w = 0
+            while Ports.shared.list.isEmpty && w < 60 { Ports.shared.scan(); await sleep(1); w += 1 }
             Ports.shared.announced = nil
             show("ports")
             await shot("ports")

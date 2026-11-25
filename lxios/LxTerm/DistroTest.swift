@@ -48,7 +48,7 @@ enum DistroTest {
                     type(s, "python3 -m http.server 8124 > /tmp/srv.log 2>&1 &\r")
                 } else if d.id == "arch" {
                     try? await Task.sleep(for: .seconds(240))           // (its setup runs in the tab first)
-                    type(s, "head -n 2 /etc/os-release; pacman -Q | wc -l; pacman -Qk pacman | tail -n 1\r")
+                    type(s, "head -n 2 /etc/os-release; pacman -Q | wc -l; pacman -Qk pacman | tail -n 1; ls -la /usr/share/terminfo/x/xterm-256color; tput clear > /dev/null && echo tput-ok\r")
                     try? await Task.sleep(for: .seconds(20))
                 } else if d.id == "almalinux" {
                     try? await Task.sleep(for: .seconds(15))

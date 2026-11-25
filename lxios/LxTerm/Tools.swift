@@ -77,7 +77,7 @@ enum Snippets {
             guard let d = UserDefaults.standard.data(forKey: key), let s = try? JSONDecoder().decode([Snippet].self, from: d) else {
                 // the first list, stored at once: Shortcuts keep a command by its id
                 // fixed ids: a shortcut shared on the web finds the same example on every iPhone
-                let first = [Snippet(id: UUID(uuidString: "6C5A1E00-0000-4000-8000-000000000001")!, title: String(localized: "Weather"), command: "curl -s 'wttr.in/Istanbul?format=3'")] + Examples.snippets + [
+                let first = [Snippet(id: UUID(uuidString: "6C5A1E00-0000-4000-8000-000000000001")!, title: String(localized: "Weather"), command: "curl -s 'wttr.in/?format=3'")] + Examples.snippets + [
                         Snippet(id: UUID(uuidString: "6C5A1E00-0000-4000-8000-000000000005")!, title: String(localized: "Update packages"), command: "apt update && apt upgrade -y"),
                         Snippet(id: UUID(uuidString: "6C5A1E00-0000-4000-8000-000000000006")!, title: String(localized: "System info"), command: "fastfetch"),
                         Snippet(id: UUID(uuidString: "6C5A1E00-0000-4000-8000-000000000007")!, title: String(localized: "Web server in /root/Files"), command: "cd /root/Files && python3 -m http.server 8000")]
@@ -104,15 +104,15 @@ struct SnippetsView: View {
         NavigationStack {
             List {
                 Section {
-                    SiriTipView(intent: RunSnippetIntent())
+                    SiriTipView(intent: LinuxToolIntent(.weather))
                         .listRowInsets(EdgeInsets()).listRowBackground(Color.clear)
-                    HStack {
-                        ShortcutsLink()
-                        Spacer()
-                        Button { showGuide = true } label: { Label("Run every day…", systemImage: "clock.arrow.circlepath") }
-                            .buttonStyle(.bordered)
-                    }
-                    .listRowBackground(Color.clear)
+                    ShortcutsLink()
+                        .frame(maxWidth: .infinity)
+                        .listRowBackground(Color.clear)
+                    Button { showGuide = true } label: { Label("Run every day…", systemImage: "clock.arrow.circlepath") }
+                        .buttonStyle(.bordered)
+                        .frame(maxWidth: .infinity)
+                        .listRowBackground(Color.clear)
                 } footer: {
                     Text("Every saved command is also in the Shortcuts app and works with Siri by its name: no need to type it again.")
                 }

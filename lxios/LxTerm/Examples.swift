@@ -27,7 +27,7 @@ enum Examples {
         **Show Result**. Works from the share sheet too: make the shortcut accept Text.
 
         ## Weather — a one-line command
-        curl -s 'wttr.in/Istanbul?format=3'
+        curl -s 'wttr.in/?format=3'      (wttr.in finds your city; or put one in: wttr.in/Paris?format=3)
         Shortcut: **Run Saved Command** (Weather) → **Speak Text**.
 
         ## Your own
