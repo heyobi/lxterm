@@ -119,16 +119,16 @@ struct SettingsView: View {
                 Section {
                     Button("Reset Debian…", role: .destructive) { confirmReset = true }
                 } footer: {
-                    Text("Erases everything installed or changed in Debian and unpacks a fresh system. Use it if the system no longer starts.")
+                    Text("Erases everything installed or changed in Debian and unpacks a fresh system. Use it if the system no longer starts. The other distributions are reset in Distributions.")
                 }
                 Section("About") {
-                    Text("Debian's own arm64 programs, unmodified, run on this iPhone in a no-JIT AArch64 interpreter with a Linux system-call layer. Not affiliated with the Debian Project.")
+                    Text("Linux distributions' own arm64 programs (Debian, Ubuntu, Alpine Linux, Fedora, AlmaLinux, Rocky Linux, openSUSE, Arch Linux ARM), unmodified, run on this iPhone in a no-JIT AArch64 interpreter with a Linux system-call layer. Not affiliated with or endorsed by these projects.")
                         .font(.footnote)
                     Link(destination: URL(string: "https://apps.apple.com/developer/id6820301575")!) {
                         Label("Enjoying LxTerm? See my other apps", systemImage: "app.badge.checkmark")
                     }
                     Link("Source code (GPL-3.0)", destination: URL(string: "https://github.com/heyobi/lxterm")!)
-                    Link("Debian package sources", destination: URL(string: "https://sources.debian.org")!)
+                    NavigationLink("Package sources") { PackageSourcesView() }
                     Link("Privacy", destination: URL(string: "https://github.com/heyobi/lxterm/blob/main/PRIVACY.md")!)
                     NavigationLink("Licenses") { LicensesView() }
                 }
@@ -150,6 +150,36 @@ struct SettingsView: View {
                 Text("Installed packages, your files in Debian and open shells are deleted.")
             }
         }
+    }
+}
+
+/// Where each distribution publishes the source code of its packages.
+struct PackageSourcesView: View {
+    static let sources: [(String, String)] = [
+        ("Debian", "https://sources.debian.org"),
+        ("Ubuntu", "https://launchpad.net/ubuntu"),
+        ("Alpine Linux", "https://gitlab.alpinelinux.org/alpine/aports"),
+        ("Fedora", "https://src.fedoraproject.org"),
+        ("AlmaLinux", "https://git.almalinux.org"),
+        ("Rocky Linux", "https://git.rockylinux.org"),
+        ("openSUSE", "https://build.opensuse.org"),
+        ("Arch Linux ARM", "https://github.com/archlinuxarm/PKGBUILDs"),
+    ]
+
+    var body: some View {
+        List {
+            Section {
+                ForEach(PackageSourcesView.sources, id: \.0) { name, url in
+                    Link(destination: URL(string: url)!) {
+                        LabeledContent(name, value: URL(string: url)?.host ?? url)
+                    }
+                }
+            } footer: {
+                Text("The programs in each distribution are that project's own binaries, unmodified; each project publishes their source code here. The package managers can fetch it too, for example apt source, dnf download --source or asp.")
+            }
+        }
+        .navigationTitle("Package sources")
+        .navigationBarTitleDisplayMode(.inline)
     }
 }
 

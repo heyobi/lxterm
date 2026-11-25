@@ -17,7 +17,7 @@
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Debian'da çalıştırdığınız programlar (curl, apt, ssh, bir web sunucusu) ağınızdaki aygıtlara bağlanabilir."
+            "value": "Terminalde çalıştırdığınız programlar (curl, bir paket yöneticisi, ssh, bir web sunucusu) ağınızdaki aygıtlara bağlanabilir."
           }
         }
       }

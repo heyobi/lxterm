@@ -182,32 +182,12 @@
         }
       }
     },
-    "Erases everything installed or changed in Debian and unpacks a fresh system. Use it if the system no longer starts.": {
-      "localizations": {
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Debian'da kurulan ya da değiştirilen her şeyi siler ve sistemi yeniden açar. Sistem artık başlamıyorsa kullanın."
-          }
-        }
-      }
-    },
     "About": {
       "localizations": {
         "tr": {
           "stringUnit": {
             "state": "translated",
             "value": "Hakkında"
-          }
-        }
-      }
-    },
-    "Debian's own arm64 programs, unmodified, run on this iPhone in a no-JIT AArch64 interpreter with a Linux system-call layer. Not affiliated with the Debian Project.": {
-      "localizations": {
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Debian'ın kendi arm64 programları, değiştirilmeden, bu iPhone'da JIT'siz bir AArch64 yorumlayıcısı ve Linux sistem çağrısı katmanıyla çalışır. Debian Projesi ile bağlantılı değildir."
           }
         }
       }
@@ -298,16 +278,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "Klavyeyi göster ya da gizle"
-          }
-        }
-      }
-    },
-    "Debian package sources": {
-      "localizations": {
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Debian paketlerinin kaynak kodu"
           }
         }
       }
@@ -1398,6 +1368,46 @@
           "stringUnit": {
             "state": "translated",
             "value": "Her biri projenin kendi resmi arm64 görüntüsüdür; değiştirilmeden Docker Hub'dan indirilir ve SHA-256 özetiyle doğrulanır. Arch Linux ARM ise pacstrap'in yaptığı gibi kendi depolarından paket paket kurulur. İndirdikten sonra yeni sekme açarken + menüsünden seçin. Resmi değildir: bu projelerle bağlantılı değildir, onlarca desteklenmez."
+          }
+        }
+      }
+    },
+    "Erases everything installed or changed in Debian and unpacks a fresh system. Use it if the system no longer starts. The other distributions are reset in Distributions.": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Debian'da kurulan ya da değiştirilen her şeyi siler ve temiz bir sistem açar. Sistem artık açılmıyorsa kullanın. Diğer dağıtımlar Dağıtımlar ekranından sıfırlanır."
+          }
+        }
+      }
+    },
+    "Linux distributions' own arm64 programs (Debian, Ubuntu, Alpine Linux, Fedora, AlmaLinux, Rocky Linux, openSUSE, Arch Linux ARM), unmodified, run on this iPhone in a no-JIT AArch64 interpreter with a Linux system-call layer. Not affiliated with or endorsed by these projects.": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Linux dağıtımlarının kendi arm64 programları (Debian, Ubuntu, Alpine Linux, Fedora, AlmaLinux, Rocky Linux, openSUSE, Arch Linux ARM) değiştirilmeden, bu iPhone'da JIT'siz bir AArch64 yorumlayıcısı ve Linux sistem çağrısı katmanıyla çalışır. Bu projelerle bağlantılı değildir, onlarca desteklenmez."
+          }
+        }
+      }
+    },
+    "Package sources": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Paket kaynakları"
+          }
+        }
+      }
+    },
+    "The programs in each distribution are that project's own binaries, unmodified; each project publishes their source code here. The package managers can fetch it too, for example apt source, dnf download --source or asp.": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Her dağıtımdaki programlar o projenin kendi derlemeleridir, değiştirilmemiştir; kaynak kodlarını her proje burada yayımlar. Paket yöneticileri de indirebilir: örneğin apt source, dnf download --source ya da asp."
           }
         }
       }

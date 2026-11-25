@@ -1,7 +1,7 @@
 <p align="center"><img src="docs/icon.png" width="112" alt="LxTerm icon"></p>
 <h1 align="center">LxTerm: real Linux on iPhone</h1>
-<p align="center"><b>Debian 13 runs unmodified on a normal, non-jailbroken iPhone and iPad.</b><br>
-apt, bash, Python 3 and pip, git, SSH, tmux and nano, in a native terminal app. Offline, free, open source.</p>
+<p align="center"><b>Debian 13 runs unmodified on a normal, non-jailbroken iPhone and iPad</b>, and Ubuntu, Alpine Linux, Fedora, AlmaLinux, Rocky Linux, openSUSE and Arch Linux ARM with one tap.<br>
+apt, dnf, zypper, pacman, bash, Python 3 and pip, git, SSH, tmux and nano, in a native terminal app. Servers you start open in a built-in browser (Ports); commands run from Shortcuts and Siri. Free, no ads, no in-app purchases, open source.</p>
 <p align="center"><a href="https://apps.apple.com/app/id6838355342"><img src="docs/app-store-badge.svg" height="48" alt="Download LxTerm on the App Store"></a></p>
 <p align="center">
 <img src="docs/screens/iphone-1-fetch.jpg" width="160" alt="fastfetch in Debian 13 on iPhone">
