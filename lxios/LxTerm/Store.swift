@@ -82,6 +82,7 @@ final class Store: ObservableObject {
         }
         _ = Store.prepareEngine(again: true)
         FilesDomain.register()
+        Examples.install(in: SharedFiles.shared.root)
         Ports.shared.start()
         phase = .ready
         let ids = UserDefaults.standard.stringArray(forKey: Store.idsKey) ?? []

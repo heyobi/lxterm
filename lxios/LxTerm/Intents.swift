@@ -57,16 +57,17 @@ struct RunCommandIntent: AppIntent {
     @Parameter(title: "Command") var command: String
     @Parameter(title: "Distribution", default: .debian) var distribution: DistroOption
     @Parameter(title: "Time limit (seconds)", default: 25, inclusiveRange: (1, 25)) var seconds: Int
+    @Parameter(title: "Input", description: "Text given to the command on its standard input.") var input: String?
 
     static var parameterSummary: some ParameterSummary {
-        Summary("Run \(\.$command) in \(\.$distribution)") { \.$seconds }
+        Summary("Run \(\.$command) in \(\.$distribution)") { \.$input; \.$seconds }
     }
 
     func perform() async throws -> some IntentResult & ReturnsValue<String> {
         let d = distribution.distro
         guard await MainActor.run(body: { Store.prepareEngine() }) else { throw IntentFailure.notReady }
         guard d.installed else { throw IntentFailure.notDownloaded(d.name) }
-        let out = try await Headless.run(command, root: d.builtIn ? nil : d.root.path, seconds: seconds)
+        let out = try await Headless.run(command, root: d.builtIn ? nil : d.root.path, seconds: seconds, input: input)
         return .result(value: out)
     }
 }
@@ -78,7 +79,15 @@ final class Headless {
     private var cont: CheckedContinuation<String, Error>?
     private var handle: OpaquePointer?
 
-    static func run(_ command: String, root: String?, seconds: Int) async throws -> String {
+    static func run(_ command: String, root: String?, seconds: Int, input: String? = nil) async throws -> String {
+        var command = command
+        if let input {                                             // (standard input from a file in the guest's /tmp)
+            let name = "lxterm-input-\(UUID().uuidString)"
+            let host = (root ?? Store.rootDir.path) + "/tmp/" + name
+            try? FileManager.default.createDirectory(atPath: (root ?? Store.rootDir.path) + "/tmp", withIntermediateDirectories: true)
+            try Data(input.utf8).write(to: URL(fileURLWithPath: host))
+            command = "( \(command)\n) < /tmp/\(name); s=$?; rm -f /tmp/\(name); exit $s"
+        }
         let h = Headless()
         return try await withCheckedThrowingContinuation { c in
             h.cont = c
@@ -159,14 +168,15 @@ struct RunSnippetIntent: AppIntent {
 
     @Parameter(title: "Saved Command") var snippet: SnippetEntity
     @Parameter(title: "Distribution", default: .debian) var distribution: DistroOption
+    @Parameter(title: "Input", description: "Text given to the command on its standard input.") var input: String?
 
-    static var parameterSummary: some ParameterSummary { Summary("Run \(\.$snippet) in \(\.$distribution)") }
+    static var parameterSummary: some ParameterSummary { Summary("Run \(\.$snippet) in \(\.$distribution)") { \.$input } }
 
     func perform() async throws -> some IntentResult & ReturnsValue<String> & ProvidesDialog {
         let d = distribution.distro
         guard await MainActor.run(body: { Store.prepareEngine() }) else { throw IntentFailure.notReady }
         guard d.installed else { throw IntentFailure.notDownloaded(d.name) }
-        let out = try await Headless.run(snippet.command, root: d.builtIn ? nil : d.root.path, seconds: 25)
+        let out = try await Headless.run(snippet.command, root: d.builtIn ? nil : d.root.path, seconds: 25, input: input)
         return .result(value: out, dialog: IntentDialog(stringLiteral: out.isEmpty ? String(localized: "Done.") : String(out.suffix(600))))
     }
 }

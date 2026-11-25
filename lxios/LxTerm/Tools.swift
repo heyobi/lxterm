@@ -75,10 +75,13 @@ enum Snippets {
     static var all: [Snippet] {
         get {
             guard let d = UserDefaults.standard.data(forKey: key), let s = try? JSONDecoder().decode([Snippet].self, from: d) else {
-                return [Snippet(title: "Weather", command: "curl -s 'wttr.in/Istanbul?format=3'"),
-                        Snippet(title: "Update packages", command: "apt update && apt upgrade -y"),
-                        Snippet(title: "System info", command: "fastfetch"),
-                        Snippet(title: "Web server in /root/Files", command: "cd /root/Files && python3 -m http.server 8000")]
+                // the first list, stored at once: Shortcuts keep a command by its id
+                let first = [Snippet(title: String(localized: "Weather"), command: "curl -s 'wttr.in/Istanbul?format=3'")] + Examples.snippets + [
+                        Snippet(title: String(localized: "Update packages"), command: "apt update && apt upgrade -y"),
+                        Snippet(title: String(localized: "System info"), command: "fastfetch"),
+                        Snippet(title: String(localized: "Web server in /root/Files"), command: "cd /root/Files && python3 -m http.server 8000")]
+                UserDefaults.standard.set(try? JSONEncoder().encode(first), forKey: key)
+                return first
             }
             return s
         }
@@ -174,16 +177,27 @@ struct AutomationGuide: View {
                     ShortcutsLink().frame(maxWidth: .infinity)
                         .listRowBackground(Color.clear)
                 }
-                Section("Example") {
-                    Text("curl -s 'wttr.in/Istanbul?format=3'").font(.system(.footnote, design: .monospaced)).textSelection(.enabled)
-                    Text("Save it as a command named Weather, then say “LxTerm Weather” to Siri, or run it every morning with the steps above.")
-                        .font(.footnote).foregroundStyle(.secondary)
+                Section {
+                    recipe("Exchange rates every morning", "Run Saved Command: Exchange rates → Show Notification")
+                    recipe("A note by voice", "Dictate Text → Run Saved Command: Save a note, Input: Dictated Text")
+                    recipe("Statistics of copied text", "Get Clipboard → Run Saved Command: Text statistics, Input: Clipboard → Show Result")
+                    recipe("Weather out loud", "Run Saved Command: Weather → Speak Text")
+                } header: { Text("Examples") } footer: {
+                    Text("The scripts are in Files › LxTerm › Examples (/root/Files/Examples), with a README. Change them or write your own: input from a shortcut arrives on standard input.")
                 }
             }
             .navigationTitle("Run Every Day")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
         }
+    }
+
+    private func recipe(_ title: LocalizedStringKey, _ actions: LocalizedStringKey) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title).font(.subheadline.weight(.semibold))
+            Text(actions).font(.caption).foregroundStyle(.secondary)
+        }
+        .padding(.vertical, 2)
     }
 
     private func step(_ n: Int, _ text: LocalizedStringKey, _ icon: String) -> some View {

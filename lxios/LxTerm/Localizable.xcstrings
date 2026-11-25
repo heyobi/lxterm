@@ -1312,16 +1312,6 @@
         }
       }
     },
-    "Save it as a command named Weather, then say “LxTerm Weather” to Siri, or run it every morning with the steps above.": {
-      "localizations": {
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Bunu Weather adıyla kaydedin, sonra Siri'ye “LxTerm Weather” deyin ya da yukarıdaki adımlarla her sabah çalıştırın."
-          }
-        }
-      }
-    },
     "Run Every Day": {
       "localizations": {
         "tr": {
@@ -1458,6 +1448,146 @@
           "stringUnit": {
             "state": "translated",
             "value": "Kabuk başlatılamadı (%2$@ içinde %1$@). Dağıtımı Ayarlar › Dağıtımlar'dan sıfırlayın."
+          }
+        }
+      }
+    },
+    "Input": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Girdi"
+          }
+        }
+      }
+    },
+    "Text given to the command on its standard input.": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Komuta standart girdisinden verilen metin."
+          }
+        }
+      }
+    },
+    "Exchange rates": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Döviz kurları"
+          }
+        }
+      }
+    },
+    "Save a note": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Not kaydet"
+          }
+        }
+      }
+    },
+    "Text statistics": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Metin istatistiği"
+          }
+        }
+      }
+    },
+    "Exchange rates every morning": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Her sabah döviz kurları"
+          }
+        }
+      }
+    },
+    "Run Saved Command: Exchange rates → Show Notification": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kayıtlı Komutu Çalıştır: Döviz kurları → Bildirim Göster"
+          }
+        }
+      }
+    },
+    "A note by voice": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sesle not"
+          }
+        }
+      }
+    },
+    "Dictate Text → Run Saved Command: Save a note, Input: Dictated Text": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Metni Dikte Et → Kayıtlı Komutu Çalıştır: Not kaydet, Girdi: Dikte Edilen Metin"
+          }
+        }
+      }
+    },
+    "Statistics of copied text": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kopyalanan metnin istatistiği"
+          }
+        }
+      }
+    },
+    "Get Clipboard → Run Saved Command: Text statistics, Input: Clipboard → Show Result": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Panoyu Al → Kayıtlı Komutu Çalıştır: Metin istatistiği, Girdi: Pano → Sonucu Göster"
+          }
+        }
+      }
+    },
+    "Weather out loud": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hava durumunu sesli oku"
+          }
+        }
+      }
+    },
+    "Run Saved Command: Weather → Speak Text": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kayıtlı Komutu Çalıştır: Hava durumu → Metni Seslendir"
+          }
+        }
+      }
+    },
+    "The scripts are in Files › LxTerm › Examples (/root/Files/Examples), with a README. Change them or write your own: input from a shortcut arrives on standard input.": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Betikler Dosyalar › LxTerm › Examples klasöründe (/root/Files/Examples), bir README ile birlikte. Değiştirin ya da kendinizinkini yazın: kestirmeden gelen girdi standart girdiye ulaşır."
           }
         }
       }
