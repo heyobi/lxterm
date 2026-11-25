@@ -306,6 +306,7 @@ final class DistroManager: ObservableObject {
         progress[d.id] = nil
         if let e, !cancelled { failure = "\(d.name): \(e.localizedDescription)" }
         refresh()
+        Store.shared?.distributionsChanged()                      // (the first one installed becomes the default)
     }
 
     func remove(_ d: Distro) {

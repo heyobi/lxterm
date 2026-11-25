@@ -85,6 +85,7 @@ final class Store: ObservableObject {
             lx_engine_trace(docs.appendingPathComponent("lxterm.trace").path)
         }
         _ = Store.prepareEngine(again: true)
+        fixDefault()
         FilesDomain.register()
         Examples.install(in: SharedFiles.shared.root)
         Ports.shared.start()
@@ -201,8 +202,15 @@ final class Store: ObservableObject {
         unpack()
     }
 
+    /// The default distribution is always an installed one while any is: the first installed
+    /// when the chosen one was removed (or none was chosen).
+    func fixDefault() {
+        if !Distro.named(defaultDistro).installed, let first = Distro.installed.first { defaultDistro = first.id }
+    }
+
     /// After a distribution was removed: its tabs go; with none left, one in the default.
     func distributionsChanged() {
+        fixDefault()
         for s in sessions where !s.distro.installed { s.close() }
         sessions.removeAll { !$0.distro.installed }
         if sessions.isEmpty, let d = Distro.preferred { sessions = [makeSession(d)] }
