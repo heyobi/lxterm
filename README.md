@@ -11,7 +11,7 @@ apt, bash, Python 3 and pip, git, SSH, tmux and nano, in a native terminal app. 
 <img src="docs/screens/iphone-5-theme.jpg" width="160" alt="Themes">
 </p>
 
-Website: https://heyobi.github.io/lxterm/ · Status: **submitted to the App Store** (in review, November 2026).
+Website: https://heyobi.github.io/lxterm/ · Status: **on the App Store** (November 2026).
 
 ## Questions
 
@@ -61,6 +61,6 @@ both modes; `core/UPSTREAM` names the commit copied here.
 
 ## License
 
-GPL-3.0-or-later (`LICENSE`), third-party notices in `NOTICE.md`. Alpine Linux and
+GPL-3.0-or-later (`LICENSE`) with an additional permission for app stores (`NOTICE.md`); contributions are accepted on the terms in `CONTRIBUTING.md`. Third-party notices in `NOTICE.md`. Alpine Linux and
 Debian are trademarks of their projects; LxTerm is not affiliated with or endorsed by
 either.

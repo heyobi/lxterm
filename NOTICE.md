@@ -6,6 +6,22 @@ General Public License, version 3 or later (`LICENSE`, SPDX `GPL-3.0-or-later`).
 `core/` is shared with LiquidAPK (github.com/heyobi/apk-on-iphone); it contains no
 code copied from other projects.
 
+## Additional permission: app stores (GPL-3.0 section 7)
+
+As an additional permission under section 7 of the GNU General Public License,
+version 3, the copyright holders of LxTerm give you permission to convey this
+program, or a work based on it, through an application store (such as Apple's App
+Store) whose terms of service or usage rules impose restrictions beyond those of the
+GPL (for example, limits on the devices a downloaded copy may run on, or on copying
+it), provided that the complete Corresponding Source of the conveyed version is
+available to its recipients free of charge under the GPL, together with this
+permission.
+
+If you modify this program, you may extend this permission to your version, but you
+are not obliged to do so. If you do not wish to do so, delete this permission
+statement from your version. Every contribution to this repository is accepted under
+this permission (`CONTRIBUTING.md`).
+
 ## Shipped inside the app
 
 | Component | Where it comes from | License |
