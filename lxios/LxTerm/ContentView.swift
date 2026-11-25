@@ -142,6 +142,14 @@ struct MainView: View {
         .onReceive(NotificationCenter.default.publisher(for: .lxOpenBrowser)) { n in
             if let u = n.object as? URL { browser = BrowserPage(url: BrowserView.local(u) ?? u) }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .lxTour)) { n in    // (screenshots: Tour.swift)
+            switch n.object as? String {
+            case "distros": showDistros = true
+            case "ports": showPorts = true
+            case "snippets": showSnippets = true
+            default: showDistros = false; showPorts = false; showSnippets = false; showSettings = false; browser = nil
+            }
+        }
         .onReceive(NotificationCenter.default.publisher(for: .lxFontChanged)) { _ in
             for s in store.sessions { s.applySettings() }
             themeTick += 1

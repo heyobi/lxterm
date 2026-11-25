@@ -1,91 +1,159 @@
 import Foundation
 import UIKit
 
-/// App Store screenshots (launch argument -shots, scripts/sim-shots.sh): types commands into the
-/// first shell as a user would, waiting after each one for the shell's (or Python's) prompt, writes
-/// the scene's name to Documents/shots/ready and waits for the script to answer in
-/// Documents/shots/next before the next scene. Needs no network (fastfetch is in the root).
+/// App Store screenshots (launch argument -shots, scripts/sim-shots.sh): downloads Arch Linux ARM,
+/// Ubuntu and Fedora, then plays scenes (tabs in several distributions, the Distributions list,
+/// Ports and the browser, saved commands), typing as a user would and waiting for each prompt.
+/// For each scene it writes the scene's name to Documents/shots/ready and waits for the script to
+/// answer in Documents/shots/next. Needs the network (downloads, pacman, apt).
 @MainActor
 enum Tour {
-    private enum Wait { case prompt, seconds(Double) }
-    private struct Scene {
-        let name: String?                 // nil: between scenes, no screenshot
-        let steps: [(String, Wait)]
-        var keyboard = false
-        var theme: String? = nil
+    static let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("shots")
+
+    private static func log(_ s: String) {
+        let u = dir.appendingPathComponent("tour.log")
+        let old = (try? String(contentsOf: u, encoding: .utf8)) ?? ""
+        try? (old + s + "\n").write(to: u, atomically: true, encoding: .utf8)
     }
 
-    private static let scenes: [Scene] = [
-        // fastfetch with Debian's small logo and no host-dependent lines (the simulator's disk and memory)
-        Scene(name: nil, steps: [("mkdir -p ~/.config/fastfetch && echo '{\"logo\":{\"source\":\"debian_small\"},\"modules\":[\"title\",\"separator\",\"os\",\"kernel\",\"packages\",\"shell\",\"terminal\",\"cpu\",\"locale\",\"break\",\"colors\"]}' > ~/.config/fastfetch/config.jsonc\r", .prompt)]),
-        Scene(name: "fetch", steps: [("clear\r", .prompt), ("fastfetch\r", .prompt)]),
-        Scene(name: "python", steps: [("clear\r", .prompt), ("python3\r", .prompt),
-                                      ("import statistics, platform\r", .prompt),
-                                      ("platform.machine(), platform.system()\r", .prompt),
-                                      ("data = [12, 7, 3, 21, 8, 15]\r", .prompt),
-                                      ("statistics.mean(data), sorted(data)\r", .prompt),
-                                      ("{w: len(w) for w in 'apt pip ssh tmux'.split()}\r", .prompt)]),
-        Scene(name: nil, steps: [("exit()\r", .prompt), ("clear\r", .prompt)]),
-        Scene(name: "tmux", steps: [("tmux new-session \\; split-window -v 'nano /etc/os-release' \\; select-pane -t 0\r", .seconds(8)),
-                                    ("uname -sm; python3 --version; tmux -V\r", .seconds(4))]),
-        Scene(name: nil, steps: [("tmux kill-server\r", .seconds(4)), ("clear\r", .prompt)]),
-        Scene(name: "keys", steps: [("id; echo $SHELL; uname -sm\r", .prompt)], keyboard: true),
-        Scene(name: "theme", steps: [("clear\r", .prompt), ("ls -la --color=always /\r", .prompt)], theme: "solarized"),
-    ]
-
-    /// The last output without escape sequences ends in a prompt: bash's "# " or Python's ">>> ".
+    /// The last output without escape sequences ends in a prompt: "# " (bash, Alpine's sh) or ">>> ".
     private static func atPrompt(_ s: Session) -> Bool {
-        var t = s.tail(400)
-        while let r = t.range(of: "\u{1b}\\[[0-9;?]*[A-Za-z]", options: .regularExpression) { t.removeSubrange(r) }
+        var t = s.tail(600)
+        while let r = t.range(of: "\u{1b}\\[[0-9;?]*[A-Za-z]|\u{1b}\\][^\u{07}\u{1b}]*(\u{07}|\u{1b}\\\\)", options: .regularExpression) { t.removeSubrange(r) }
         return t.hasSuffix("# ") || t.hasSuffix(">>> ")
     }
 
-    private static func hideKeyboard(_ s: Session) {
-        _ = s.view.resignFirstResponder()
-        s.view.window?.endEditing(true)
+    private static func sleep(_ s: Double) async { try? await Task.sleep(nanoseconds: UInt64(s * 1e9)) }
+
+    private static func waitPrompt(_ s: Session, max: Double = 600) async {
+        var n = 0.0
+        while !atPrompt(s) && n < max { await sleep(0.5); n += 0.5 }
+        await sleep(0.6)
+    }
+
+    private static func type(_ s: Session, _ text: String, wait: Bool = true, max: Double = 600) async {
+        for ch in text.utf8 { s.sendKeys([ch]); await sleep(0.02) }
+        await sleep(0.4)
+        if wait { await waitPrompt(s, max: max) }
+    }
+
+    private static func hideKeyboard(_ s: Session?) {
+        _ = s?.view.resignFirstResponder()
         UIApplication.shared.sendAction(#selector(UIResponder.resignFirstResponder), to: nil, from: nil, for: nil)
     }
 
+    private static func show(_ what: String) { NotificationCenter.default.post(name: .lxTour, object: what) }
+
+    /// One screenshot: the script takes it, then answers.
+    private static func shot(_ name: String) async {
+        await sleep(1.2)
+        try? name.write(to: dir.appendingPathComponent("ready"), atomically: true, encoding: .utf8)
+        let asked = Date()
+        while (try? String(contentsOf: dir.appendingPathComponent("next"), encoding: .utf8)) != name, Date().timeIntervalSince(asked) < 300 {
+            await sleep(0.5)
+        }
+        log("shot \(name)")
+    }
+
+    /// A new tab in `d`, shown, its shell at the prompt.
+    private static func open(_ store: Store, _ d: Distro) async -> Session? {
+        store.newSession(d)
+        await sleep(1.5)
+        guard let s = store.current else { return nil }
+        hideKeyboard(s)
+        await waitPrompt(s, max: 120)
+        return s
+    }
+
     static func run(_ store: Store) {
-        let dir = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0].appendingPathComponent("shots")
         try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         Task { @MainActor in
-            guard let s = store.current else { return }
-            // a font that fits fastfetch's two columns on a phone
-            Settings.fontSize = UIDevice.current.userInterfaceIdiom == .phone ? 12 : 20
+            let phone = UIDevice.current.userInterfaceIdiom == .phone
+            Settings.fontSize = phone ? 12 : 19
+            UserDefaults.standard.set("night", forKey: "theme")
+            UserDefaults.standard.set(true, forKey: "distroColours")
             NotificationCenter.default.post(name: .lxFontChanged, object: nil)
-            var waited = 0
-            while !atPrompt(s) && waited < 120 { try? await Task.sleep(nanoseconds: 500_000_000); waited += 1 }
-            hideKeyboard(s)
-            for scene in scenes {
-                if let t = scene.theme {
-                    UserDefaults.standard.set(t, forKey: "theme")
-                    NotificationCenter.default.post(name: .lxFontChanged, object: nil)
+            guard let deb = store.current else { return }
+            await waitPrompt(deb, max: 120)
+            hideKeyboard(deb)
+            // the distributions, downloaded first (their tabs come later)
+            for id in ["arch", "ubuntu", "fedora"] {
+                let d = Distro.named(id)
+                do { try await d.install { _ in }; log("installed \(id)") } catch { log("FAILED \(id): \(error)") }
+            }
+            DistroManager.shared.refresh()
+            // fastfetch without the host's disk and memory lines
+            let cfg = "mkdir -p ~/.config/fastfetch && echo '{\"modules\":[\"title\",\"separator\",\"os\",\"kernel\",\"packages\",\"shell\",\"terminal\",\"cpu\",\"locale\",\"break\",\"colors\"]}' > ~/.config/fastfetch/config.jsonc\r"
+
+            // 1. Arch Linux ARM: its setup runs in the first tab, then pacman installs fastfetch
+            if let arch = await open(store, Distro.named("arch")) {
+                var n = 0
+                while FileManager.default.fileExists(atPath: Distro.named("arch").root.appendingPathComponent(".lxterm-firstrun").path) && n < 1200 {
+                    await sleep(1); n += 1
                 }
-                try? await Task.sleep(nanoseconds: 300_000_000)
-                if scene.keyboard { _ = s.view.becomeFirstResponder() } else { hideKeyboard(s) }
-                for (keys, wait) in scene.steps {
-                    for ch in keys.utf8 { s.sendKeys([ch]); try? await Task.sleep(nanoseconds: 20_000_000) }
-                    try? await Task.sleep(nanoseconds: 300_000_000)
-                    switch wait {
-                    case .seconds(let n):
-                        try? await Task.sleep(nanoseconds: UInt64(n * 1e9))
-                    case .prompt:
-                        var n = 0
-                        while !atPrompt(s) && n < 600 { try? await Task.sleep(nanoseconds: 250_000_000); n += 1 }
-                        try? await Task.sleep(nanoseconds: 500_000_000)
-                    }
-                }
-                guard let name = scene.name else { continue }
-                if !scene.keyboard { hideKeyboard(s); try? await Task.sleep(nanoseconds: 900_000_000) }
-                try? name.write(to: dir.appendingPathComponent("ready"), atomically: true, encoding: .utf8)
-                let asked = Date()
-                while (try? String(contentsOf: dir.appendingPathComponent("next"), encoding: .utf8)) != name,
-                      Date().timeIntervalSince(asked) < 300 {
-                    try? await Task.sleep(nanoseconds: 500_000_000)
-                }
+                await waitPrompt(arch)
+                await type(arch, "pacman -S --noconfirm fastfetch > /dev/null 2>&1\r", max: 900)
+                await type(arch, cfg)
+                await type(arch, "clear; fastfetch\r")
+                hideKeyboard(arch)
+                await shot("arch")
+            }
+
+            // 2. the Distributions list
+            show("distros")
+            await shot("distros")
+            show("close")
+            await sleep(1)
+
+            // 3. Ubuntu: apt, in Ubuntu's colours (iPad: beside Arch)
+            if !phone { UserDefaults.standard.set(true, forKey: "split") }
+            if let ub = await open(store, Distro.named("ubuntu")) {
+                await type(ub, "apt-get update > /dev/null 2>&1; apt-get install -y --no-install-recommends cowsay 2>&1 | tail -n 3\r", max: 900)
+                await type(ub, "clear; head -n 2 /etc/os-release; /usr/games/cowsay -f tux 'apt works on iPhone'\r")
+                hideKeyboard(ub)
+                await shot("ubuntu")
+            }
+            UserDefaults.standard.set(false, forKey: "split")
+
+            // 4. Ports: a server in Debian, listed, then opened in the browser
+            store.select(0)
+            await sleep(1)
+            hideKeyboard(deb)
+            await type(deb, "clear; cd /root/Files && python3 -m http.server 8000 > /dev/null 2>&1 &\r", wait: false)
+            await sleep(8)
+            await type(deb, "clear; ls /root/Files/Examples\r")
+            hideKeyboard(deb)
+            Ports.shared.scan()
+            Ports.shared.announced = nil
+            show("ports")
+            await shot("ports")
+            show("close")
+            await sleep(1)
+            NotificationCenter.default.post(name: .lxOpenBrowser, object: URL(string: "http://localhost:8000/Examples/")!)
+            await sleep(5)
+            await shot("browser")
+            show("close")
+            await sleep(1.5)
+
+            // 5. saved commands, Shortcuts and Siri
+            show("snippets")
+            await shot("shortcuts")
+            show("close")
+            await sleep(1)
+
+            // 6. Fedora with the key row: tabs in four distributions
+            if let fe = await open(store, Distro.named("fedora")) {
+                await type(fe, "head -n 2 /etc/os-release; dnf --version | head -n 1; rpm -q bash\r")
+                _ = fe.view.becomeFirstResponder()
+                await sleep(1.5)
+                await shot("keys")
             }
             try? "done".write(to: dir.appendingPathComponent("ready"), atomically: true, encoding: .utf8)
         }
     }
+}
+
+extension Notification.Name {
+    /// Tour: show a sheet ("distros", "ports", "snippets") or close everything ("close").
+    static let lxTour = Notification.Name("lxTour")
 }

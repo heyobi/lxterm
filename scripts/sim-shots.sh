@@ -28,7 +28,7 @@ xcrun simctl uninstall "$DEV" "$BUNDLE" || true
 xcrun simctl install "$DEV" "$APP"
 xcrun simctl launch "$DEV" "$BUNDLE" -shots
 DATA=$(xcrun simctl get_app_container "$DEV" "$BUNDLE" data)
-for i in $(seq 1 1800); do
+for i in $(seq 1 4200); do
   if [ -f "$DATA/Documents/shots/ready" ]; then
     NAME=$(cat "$DATA/Documents/shots/ready")
     [ "$NAME" = "done" ] && { echo "tour finished after ${i}s"; break; }
@@ -41,5 +41,6 @@ for i in $(seq 1 1800); do
   fi
   sleep 1
 done
+cat "$DATA/Documents/shots/tour.log" 2>/dev/null || true
 sips -g pixelWidth -g pixelHeight "$OUT"/*.png | grep pixel | sort | uniq -c || true
 xcrun simctl shutdown "$DEV" || true

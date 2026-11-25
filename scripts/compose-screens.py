@@ -8,11 +8,13 @@ from pathlib import Path
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
 ORDER = [
-    ('fetch', 'Real Linux on iPhone', 'apt, bash, Python, tmux and SSH'),
-    ('python', 'Python 3 in your pocket', 'pip and real PyPI packages'),
-    ('tmux', 'tmux, nano, job control', 'Ctrl-C and Ctrl-Z work like on Linux'),
-    ('keys', 'The keys a phone lacks', 'Esc, Ctrl, Tab and arrows'),
-    ('theme', 'Make it yours', 'Themes, font size, several shells'),
+    ('arch', 'Real Linux on iPhone', 'Arch, Ubuntu, Fedora, Debian and more'),
+    ('distros', 'Eight distributions', 'One tap: official images, checked before use'),
+    ('ubuntu', 'Real package managers', 'apt, dnf, zypper, pacman, apk'),
+    ('ports', 'Run servers', 'Python, Jupyter, Flask: listed under Ports'),
+    ('browser', 'Open them right here', 'A built-in browser for your servers'),
+    ('shortcuts', 'Shortcuts and Siri', 'Automate commands, ready-made tools'),
+    ('keys', 'Made for the phone', 'Key row, F keys, tabs in every distribution'),
 ]
 BOLD = 'C:/Windows/Fonts/segoeuib.ttf'
 SEMI = 'C:/Windows/Fonts/seguisb.ttf'
@@ -111,7 +113,7 @@ def main():
         if not src.exists():
             print('missing', name)
             continue
-        dark = name in ('fetch', 'tmux', 'theme')
+        dark = name in ('arch', 'ubuntu', 'ports', 'keys')
         compose(src, title, sub, out / f'{i}-{name}.png', dark, fold if use_fold else None)
         print('saved', i, name, '(fold)' if use_fold else '')
 
