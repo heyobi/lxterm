@@ -101,7 +101,8 @@ struct SettingsView: View {
     @AppStorage("cursorBlink") private var cursorBlink = true
     @AppStorage("distroColours") private var distroColours = true
     @State private var size = Settings.fontSize
-    @State private var confirmReset = false
+    @State private var resetting: Distro?
+    @ObservedObject private var distros = DistroManager.shared
 
     var body: some View {
         NavigationStack {
@@ -143,9 +144,13 @@ struct SettingsView: View {
                     Text("New tabs (marked ⚡) run Debian in WebKit's WebAssembly engine, which compiles programs as they run: long jobs are several times faster. It starts from a copy of your system and keeps its own from then on.")
                 }
                 Section {
-                    Button("Reset Debian…", role: .destructive) { confirmReset = true }
+                    Menu {
+                        ForEach(distros.installed) { d in Button(d.name) { resetting = d } }
+                    } label: {
+                        Text("Reset a distribution…").foregroundStyle(.red)
+                    }
                 } footer: {
-                    Text("Erases everything installed or changed in Debian and unpacks a fresh system. Use it if the system no longer starts. The other distributions are reset in Distributions.")
+                    Text("Erases everything installed or changed in the chosen distribution and puts a fresh copy in its place: Debian from the app, the others downloaded again. Use it if a system no longer starts.")
                 }
                 Section("About") {
                     Text("Linux distributions' own arm64 programs (Debian, Ubuntu, Alpine Linux, Fedora, AlmaLinux, Rocky Linux, openSUSE, Arch Linux ARM), unmodified, run on this iPhone in a no-JIT AArch64 interpreter with a Linux system-call layer. Not affiliated with or endorsed by these projects.")
@@ -171,10 +176,18 @@ struct SettingsView: View {
             .onChange(of: cursor) { _, _ in NotificationCenter.default.post(name: .lxFontChanged, object: nil) }
             .onChange(of: cursorBlink) { _, _ in NotificationCenter.default.post(name: .lxFontChanged, object: nil) }
             .onChange(of: distroColours) { _, _ in NotificationCenter.default.post(name: .lxFontChanged, object: nil) }
-            .confirmationDialog("Reset Debian?", isPresented: $confirmReset, titleVisibility: .visible) {
-                Button("Erase and unpack again", role: .destructive) { dismiss(); store.reset() }
+            .confirmationDialog(Text("Reset \(resetting?.name ?? "")?"), isPresented: Binding(get: { resetting != nil }, set: { if !$0 { resetting = nil } }), titleVisibility: .visible) {
+                Button("Erase and start fresh", role: .destructive) {
+                    guard let d = resetting else { return }
+                    if d.builtIn { dismiss(); store.reset() }
+                    else {
+                        for s in store.sessions where s.distro == d { store.close(s) }
+                        distros.remove(d)
+                        distros.download(d)
+                    }
+                }
             } message: {
-                Text("Installed packages, your files in Debian and open shells are deleted.")
+                Text("Installed packages, your files in it (not those in /root/Files) and its open tabs are deleted.")
             }
         }
     }

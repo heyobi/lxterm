@@ -1372,16 +1372,6 @@
         }
       }
     },
-    "Erases everything installed or changed in Debian and unpacks a fresh system. Use it if the system no longer starts. The other distributions are reset in Distributions.": {
-      "localizations": {
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Debian'da kurulan ya da değiştirilen her şeyi siler ve temiz bir sistem açar. Sistem artık açılmıyorsa kullanın. Diğer dağıtımlar Dağıtımlar ekranından sıfırlanır."
-          }
-        }
-      }
-    },
     "Linux distributions' own arm64 programs (Debian, Ubuntu, Alpine Linux, Fedora, AlmaLinux, Rocky Linux, openSUSE, Arch Linux ARM), unmodified, run on this iPhone in a no-JIT AArch64 interpreter with a Linux system-call layer. Not affiliated with or endorsed by these projects.": {
       "localizations": {
         "tr": {
@@ -1418,6 +1408,46 @@
           "stringUnit": {
             "state": "translated",
             "value": "Dağıtım renkleri"
+          }
+        }
+      }
+    },
+    "Reset a distribution…": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bir dağıtımı sıfırla…"
+          }
+        }
+      }
+    },
+    "Erases everything installed or changed in the chosen distribution and puts a fresh copy in its place: Debian from the app, the others downloaded again. Use it if a system no longer starts.": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seçilen dağıtımda kurulan ya da değiştirilen her şeyi siler ve yerine temiz bir kopya koyar: Debian uygulamanın içinden, diğerleri yeniden indirilir. Bir sistem artık açılmıyorsa kullanın."
+          }
+        }
+      }
+    },
+    "Erase and start fresh": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sil ve temiz başlat"
+          }
+        }
+      }
+    },
+    "Installed packages, your files in it (not those in /root/Files) and its open tabs are deleted.": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kurulu paketler, içindeki dosyalarınız (/root/Files'takiler hariç) ve açık sekmeleri silinir."
           }
         }
       }
