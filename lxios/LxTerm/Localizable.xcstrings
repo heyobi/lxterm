@@ -1671,6 +1671,196 @@
           }
         }
       }
+    },
+    "Tool": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Araç"
+          }
+        }
+      }
+    },
+    "Linux Tool": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Linux Aracı"
+          }
+        }
+      }
+    },
+    "Argument": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Değer"
+          }
+        }
+      }
+    },
+    "Weather here": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bulunduğum yerde hava"
+          }
+        }
+      }
+    },
+    "Is the site up?": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Site ayakta mı?"
+          }
+        }
+      }
+    },
+    "My network": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ağım"
+          }
+        }
+      }
+    },
+    "Strong password": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Güçlü şifre"
+          }
+        }
+      }
+    },
+    "Define a word": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kelime tanımı"
+          }
+        }
+      }
+    },
+    "Hacker News front page": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hacker News ön sayfa"
+          }
+        }
+      }
+    },
+    "Weather Here": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hava Durumu"
+          }
+        }
+      }
+    },
+    "Is the Site Up?": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Site Ayakta mı?"
+          }
+        }
+      }
+    },
+    "My Network": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ağım"
+          }
+        }
+      }
+    },
+    "Exchange Rates": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Döviz Kurları"
+          }
+        }
+      }
+    },
+    "Strong Password": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Güçlü Şifre"
+          }
+        }
+      }
+    },
+    "Define a Word": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kelime Tanımı"
+          }
+        }
+      }
+    },
+    "Hacker News": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hacker News"
+          }
+        }
+      }
+    },
+    "Run %@": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ çalıştır"
+          }
+        }
+      }
+    },
+    "The site, currency, password length or word, for the tools that take one.": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Değer alan araçlar için site, para birimi, şifre uzunluğu ya da kelime."
+          }
+        }
+      }
+    },
+    "Ready-made tools that run in Linux on this iPhone: the weather where you are, whether a site is up, your network, exchange rates, a strong password, a word's definition, Hacker News.": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu iPhone'daki Linux'ta çalışan hazır araçlar: bulunduğun yerde hava, bir sitenin ayakta olup olmadığı, ağın, döviz kurları, güçlü şifre, kelime tanımı, Hacker News."
+          }
+        }
+      }
     }
   }
 }

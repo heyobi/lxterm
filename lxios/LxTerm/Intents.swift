@@ -129,7 +129,22 @@ final class Headless {
 }
 
 struct LxTermShortcuts: AppShortcutsProvider {
+    static var shortcutTileColor: ShortcutTileColor = .grayGreen
     static var appShortcuts: [AppShortcut] {
+        AppShortcut(intent: LinuxToolIntent(.weather), phrases: ["Weather in \(.applicationName)", "\(.applicationName) weather"],
+                    shortTitle: "Weather Here", systemImageName: "cloud.sun")
+        AppShortcut(intent: LinuxToolIntent(.site), phrases: ["Is my site up in \(.applicationName)", "\(.applicationName) site check"],
+                    shortTitle: "Is the Site Up?", systemImageName: "checkmark.shield")
+        AppShortcut(intent: LinuxToolIntent(.network), phrases: ["My network in \(.applicationName)", "\(.applicationName) my IP"],
+                    shortTitle: "My Network", systemImageName: "network")
+        AppShortcut(intent: LinuxToolIntent(.rates), phrases: ["Exchange rates in \(.applicationName)", "\(.applicationName) rates"],
+                    shortTitle: "Exchange Rates", systemImageName: "dollarsign.arrow.circlepath")
+        AppShortcut(intent: LinuxToolIntent(.password), phrases: ["Strong password in \(.applicationName)", "\(.applicationName) password"],
+                    shortTitle: "Strong Password", systemImageName: "key")
+        AppShortcut(intent: LinuxToolIntent(.define), phrases: ["Define a word in \(.applicationName)", "\(.applicationName) dictionary"],
+                    shortTitle: "Define a Word", systemImageName: "book")
+        AppShortcut(intent: LinuxToolIntent(.news), phrases: ["Hacker News in \(.applicationName)", "\(.applicationName) news"],
+                    shortTitle: "Hacker News", systemImageName: "newspaper")
         AppShortcut(intent: RunCommandIntent(), phrases: ["Run a command in \(.applicationName)", "\(.applicationName) command"],
                     shortTitle: "Run Command", systemImageName: "terminal")
         AppShortcut(intent: RunInTerminalIntent(), phrases: ["Open a command in \(.applicationName)"],
