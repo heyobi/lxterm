@@ -117,7 +117,7 @@ enum LinuxTool: String, AppEnum {
 /// Runs one of the tools and returns what it printed (Siri reads it out).
 struct LinuxToolIntent: AppIntent {
     static var title: LocalizedStringResource = "Linux Tool"
-    static var description = IntentDescription("Ready-made tools that run in Linux on this iPhone: the weather where you are, whether a site is up, your network, exchange rates, a strong password, a word's definition, Hacker News.")
+    static var description = IntentDescription("Ready-made tools that run in Linux on this device: the weather where you are, whether a site is up, your network, exchange rates, a strong password, a word's definition, Hacker News.")
 
     @Parameter(title: "Tool", default: .weather) var tool: LinuxTool
     @Parameter(title: "Argument", description: "The site, currency, password length or word, for the tools that take one.") var argument: String?

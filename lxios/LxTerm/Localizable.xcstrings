@@ -1852,12 +1852,12 @@
         }
       }
     },
-    "Ready-made tools that run in Linux on this iPhone: the weather where you are, whether a site is up, your network, exchange rates, a strong password, a word's definition, Hacker News.": {
+    "Ready-made tools that run in Linux on this device: the weather where you are, whether a site is up, your network, exchange rates, a strong password, a word's definition, Hacker News.": {
       "localizations": {
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Bu iPhone'daki Linux'ta çalışan hazır araçlar: bulunduğun yerde hava, bir sitenin ayakta olup olmadığı, ağın, döviz kurları, güçlü şifre, kelime tanımı, Hacker News."
+            "value": "Bu cihazdaki Linux'ta çalışan hazır araçlar: bulunduğun yerde hava, bir sitenin ayakta olup olmadığı, ağın, döviz kurları, güçlü şifre, kelime tanımı, Hacker News."
           }
         }
       }
