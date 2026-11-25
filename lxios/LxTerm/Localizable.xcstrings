@@ -1591,6 +1591,76 @@
           }
         }
       }
+    },
+    "Default distribution": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Varsayılan dağıtım"
+          }
+        }
+      }
+    },
+    "Make Default": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Varsayılan Yap"
+          }
+        }
+      }
+    },
+    "Add": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ekle"
+          }
+        }
+      }
+    },
+    "Cancel download": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İndirmeyi iptal et"
+          }
+        }
+      }
+    },
+    "%@ · downloading…": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ · indiriliyor…"
+          }
+        }
+      }
+    },
+    "No distribution": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dağıtım yok"
+          }
+        }
+      }
+    },
+    "Add Debian again or download another distribution.": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Debian'ı yeniden ekleyin ya da başka bir dağıtım indirin."
+          }
+        }
+      }
     }
   }
 }

@@ -35,9 +35,22 @@ struct Distro: Identifiable, Hashable {
 
     static var installed: [Distro] { all.filter(\.installed) }
 
+    /// Debian deleted by the user: not unpacked again at launch.
+    static var debianRemoved: Bool {
+        get { UserDefaults.standard.bool(forKey: "debianRemoved") }
+        set { UserDefaults.standard.set(newValue, forKey: "debianRemoved") }
+    }
+
     func remove() {
-        guard !builtIn else { return }
+        if builtIn { Distro.debianRemoved = true }
         try? FileManager.default.removeItem(at: root)
+        try? FileManager.default.removeItem(at: Distro.dir.appendingPathComponent(".\(id)-new", isDirectory: true))
+    }
+
+    /// The distribution a new tab runs (Settings › Default distribution), if it is installed.
+    static var preferred: Distro? {
+        let d = named(UserDefaults.standard.string(forKey: "defaultDistro"))
+        return d.installed ? d : installed.first
     }
 
     /// Bytes used on this iPhone (slow for big trees: call off the main thread). Hard links
@@ -71,6 +84,18 @@ struct Distro: Identifiable, Hashable {
     /// Downloads, verifies and unpacks the image into `root`. progress: 0...1.
     func install(progress: @escaping @Sendable (Double) -> Void) async throws {
         let fm = FileManager.default
+        if builtIn {                                               // Debian again, from the app
+            guard let tarball = Bundle.main.path(forResource: "rootfs-debian", ofType: "tar.gz") else { throw Failure.unpack("rootfs-debian.tar.gz") }
+            try? fm.removeItem(at: root)
+            try fm.createDirectory(at: root, withIntermediateDirectories: true)
+            var files: UInt = 0
+            if let err = lx_unpack(tarball, root.path, &files, nil, nil) { throw Failure.unpack(String(cString: err)) }
+            lx_engine_prepare_root(root.path)
+            fm.createFile(atPath: okFile.path, contents: nil)
+            Distro.debianRemoved = false
+            progress(1)
+            return
+        }
         let tmpRoot = Distro.dir.appendingPathComponent(".\(id)-new", isDirectory: true)
         try? fm.removeItem(at: tmpRoot)
         try fm.createDirectory(at: tmpRoot, withIntermediateDirectories: true)
@@ -207,10 +232,13 @@ private final class Registry: NSObject, URLSessionDownloadDelegate {
         var req = URLRequest(url: URL(string: base + "/blobs/\(digest)")!)
         req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
         onProgress = progress
-        return try await withCheckedThrowingContinuation { c in
-            finished = c
-            session.downloadTask(with: req).resume()
-        }
+        let task = session.downloadTask(with: req)
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { c in
+                finished = c
+                task.resume()
+            }
+        } onCancel: { task.cancel() }
     }
 
     func urlSession(_ s: URLSession, downloadTask t: URLSessionDownloadTask, didWriteData _: Int64, totalBytesWritten w: Int64, totalBytesExpectedToWrite _: Int64) {
@@ -248,10 +276,21 @@ final class DistroManager: ObservableObject {
     @Published var failure: String?
     @Published private(set) var sizes: [String: Int64] = [:]
 
+    private var tasks: [String: Task<Void, Never>] = [:]
+
+    /// Stops a download in progress (what was fetched so far is deleted).
+    func cancel(_ d: Distro) {
+        tasks[d.id]?.cancel()
+        tasks[d.id] = nil
+        progress[d.id] = nil
+        if !d.installed { d.remove(); if d.builtIn { Distro.debianRemoved = true } }
+        refresh()
+    }
+
     func download(_ d: Distro) {
         guard progress[d.id] == nil else { return }
         progress[d.id] = 0
-        Task.detached(priority: .userInitiated) {
+        tasks[d.id] = Task.detached(priority: .userInitiated) {
             do {
                 try await d.install { f in Task { @MainActor in if DistroManager.shared.progress[d.id] != nil { DistroManager.shared.progress[d.id] = f } } }
                 await MainActor.run { DistroManager.shared.finished(d, nil) }
@@ -262,12 +301,16 @@ final class DistroManager: ObservableObject {
     }
 
     private func finished(_ d: Distro, _ e: Error?) {
+        let cancelled = tasks[d.id] == nil || e is CancellationError || (e as? URLError)?.code == .cancelled
+        tasks[d.id] = nil
         progress[d.id] = nil
-        if let e { failure = "\(d.name): \(e.localizedDescription)" }
+        if let e, !cancelled { failure = "\(d.name): \(e.localizedDescription)" }
         refresh()
     }
 
     func remove(_ d: Distro) {
+        if progress[d.id] != nil { cancel(d) }
+        if d.builtIn { WebEngine.resetRoot(); UserDefaults.standard.set(false, forKey: "webEngine") }
         d.remove()
         refresh()
     }

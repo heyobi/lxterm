@@ -68,8 +68,10 @@ struct MainView: View {
     @ObservedObject private var ports = Ports.shared
     @Environment(\.colorScheme) private var scheme
     @Environment(\.horizontalSizeClass) private var hsize
+    @Environment(\.verticalSizeClass) private var vsize
     @AppStorage("split") private var split = false
     @State private var showSearch = false
+    @State private var showDistros = false
     @State private var showSnippets = false
 
     var body: some View {
@@ -88,7 +90,15 @@ struct MainView: View {
                         Color.clear.frame(width: fold.width)
                         secondHalf.frame(width: max(100, proxy.size.width - fold.maxX))
                     }
-                } else if hsize == .regular, split, proxy.size.width > 640 {   // iPad: two shells side by side
+                } else if store.sessions.isEmpty {                       // every distribution removed
+                    ContentUnavailableView {
+                        Label("No distribution", systemImage: "shippingbox")
+                    } description: {
+                        Text("Add Debian again or download another distribution.")
+                    } actions: {
+                        Button("Distributions") { showDistros = true }.buttonStyle(.borderedProminent)
+                    }
+                } else if hsize == .regular || vsize == .compact, split, proxy.size.width > 640 {   // iPad, or an iPhone on its side: two shells side by side
                     HStack(spacing: 0) {
                         terminal(store.current).frame(width: (proxy.size.width - 1) / 2)
                         Rectangle().fill(Color.secondary.opacity(0.35)).frame(width: 1)
@@ -116,6 +126,12 @@ struct MainView: View {
         }
         .animation(.spring(duration: 0.3), value: ports.announced)
         .sheet(isPresented: $showSettings) { SettingsView().environmentObject(store) }
+        .sheet(isPresented: $showDistros) {
+            NavigationStack {
+                DistrosView().toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showDistros = false } } }
+            }
+            .environmentObject(store)
+        }
         .sheet(isPresented: $showSearch) { if let s = store.current { SearchView(session: s) } }
         .sheet(isPresented: $showSnippets) { SnippetsView().environmentObject(store).presentationDetents([.medium, .large]) }
         .sheet(isPresented: $showPorts) {
@@ -199,6 +215,7 @@ struct TabStrip: View {
     @Binding var showSnippets: Bool
     @ObservedObject private var ports = Ports.shared
     @Environment(\.horizontalSizeClass) private var hsize
+    @Environment(\.verticalSizeClass) private var vsize
     @AppStorage("split") private var split = false
 
     var body: some View {
@@ -226,7 +243,7 @@ struct TabStrip: View {
                     }
             }
             .accessibilityLabel(Text("Ports: servers running in the shells"))
-            if hsize == .regular {
+            if hsize == .regular || vsize == .compact {
                 Button { split.toggle() } label: { Image(systemName: split ? "rectangle" : "rectangle.split.2x1") }
                     .accessibilityLabel(Text("Split View"))
             }
@@ -253,14 +270,15 @@ struct NewTabButton: View {
     @ObservedObject private var distros = DistroManager.shared
 
     var body: some View {
-        let others = distros.installed.filter { !$0.builtIn }
         Group {
-            if others.isEmpty {
-                Button { store.newSession() } label: { Image(systemName: "plus") }
+            if distros.installed.count <= 1 {
+                Button { if distros.installed.isEmpty { showDistros = true } else { store.newSession() } } label: { Image(systemName: "plus") }
             } else {
                 Menu {
-                    ForEach([Distro.debian] + others) { d in
-                        Button(d.name) { store.newSession(d) }
+                    ForEach(distros.installed) { d in
+                        Button { store.newSession(d) } label: {
+                            if d.id == store.defaultDistro { Label(d.name, systemImage: "star.fill") } else { Text(d.name) }
+                        }
                     }
                     Divider()
                     Button("Get more…") { showDistros = true }

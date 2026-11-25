@@ -25,17 +25,20 @@ struct DistrosView: View {
         .confirmationDialog(Text("Remove \(confirmRemove?.name ?? "")?"), isPresented: Binding(get: { confirmRemove != nil }, set: { if !$0 { confirmRemove = nil } }), titleVisibility: .visible) {
             Button("Remove", role: .destructive) {
                 if let d = confirmRemove {
-                    for s in store.sessions where s.distro == d { store.close(s) }
                     m.remove(d)
+                    store.distributionsChanged()
                 }
             }
         } message: { Text("Everything installed or changed in it is deleted, and its tabs are closed.") }
         .confirmationDialog(Text("Reset \(confirmReset?.name ?? "")?"), isPresented: Binding(get: { confirmReset != nil }, set: { if !$0 { confirmReset = nil } }), titleVisibility: .visible) {
             Button("Erase and download again", role: .destructive) {
                 if let d = confirmReset {
-                    for s in store.sessions where s.distro == d { store.close(s) }
-                    m.remove(d)
-                    m.download(d)
+                    if d.builtIn { dismiss(); store.reset() }
+                    else {
+                        m.remove(d)
+                        store.distributionsChanged()
+                        m.download(d)
+                    }
                 }
             }
         } message: { Text("Everything installed or changed in it is deleted and a fresh copy is downloaded. Its tabs are closed.") }
@@ -49,6 +52,7 @@ struct DistrosView: View {
                 Text(d.name)
                 Group {
                     if d.builtIn { Text("\(d.detail) · included") }
+                    else if m.progress[d.id] != nil { Text("\(d.detail) · downloading…") }
                     else if installed, let s = m.sizes[d.id] { Text("\(d.detail) · \(ByteCountFormatter.string(fromByteCount: s, countStyle: .file))") }
                     else { Text("\(d.detail) · about \(d.megabytes) MB download") }
                 }
@@ -56,20 +60,25 @@ struct DistrosView: View {
                 if let p = m.progress[d.id] { ProgressView(value: p).padding(.top, 2) }
             }
             Spacer()
-            if d.builtIn || installed {
+            if m.progress[d.id] != nil {
+                Button { m.cancel(d) } label: { Image(systemName: "xmark.circle.fill").font(.title3) }
+                    .foregroundStyle(.secondary).buttonStyle(.plain)
+                    .accessibilityLabel(Text("Cancel download"))
+            } else if installed {
                 Button("Open") { store.newSession(d); dismiss() }.buttonStyle(.bordered)
-            } else if m.progress[d.id] == nil {
-                Button("Download") { m.download(d) }.buttonStyle(.borderedProminent)
+            } else {
+                Button(d.builtIn ? "Add" : "Download") { m.download(d) }.buttonStyle(.borderedProminent)
             }
         }
         .swipeActions {
-            if installed && !d.builtIn {
+            if installed {
                 Button("Remove", role: .destructive) { confirmRemove = d }
                 Button("Reset") { confirmReset = d }.tint(.orange)
             }
         }
         .contextMenu {
-            if installed && !d.builtIn {
+            if installed {
+                if store.defaultDistro != d.id { Button("Make Default", systemImage: "star") { store.defaultDistro = d.id } }
                 Button("Reset…", systemImage: "arrow.counterclockwise") { confirmReset = d }
                 Button("Remove", systemImage: "trash", role: .destructive) { confirmRemove = d }
             }

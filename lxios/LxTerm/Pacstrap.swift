@@ -104,6 +104,7 @@ enum Pacstrap {
             while try await g.next() != nil { add() }
         }
         for p in order {
+            try Task.checkCancellation()
             let pkg = cache.appendingPathComponent(p.file)
             let tar = work.appendingPathComponent(p.name + ".tar")
             if p.file.hasSuffix(".xz") { try unxz(pkg, to: tar) }
@@ -133,6 +134,7 @@ enum Pacstrap {
         pacman -U --noconfirm --dbonly /var/cache/pacman/pkg/*.pkg.tar.*[!g]
         # filesystem again, the usual way: its install script (/etc/os-release and the rest)
         pacman -U --noconfirm --overwrite '*' /var/cache/pacman/pkg/filesystem-*.pkg.tar.*[!g]
+        rm -f /var/cache/pacman/pkg/*                              # (the files are unpacked: their space back)
         rm -f /.lxterm-firstrun /tmp/lxterm-setup.sh
         echo "Arch Linux ARM is ready. Install more with: pacman -S <package>"
 

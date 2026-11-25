@@ -10,6 +10,10 @@ final class Store: ObservableObject {
     @Published var phase: Phase = .unpacking(0)
     @Published var sessions: [Session] = []
     @Published var selected = 0
+    /// Settings › Default distribution (a new tab, and the tab opened when the last one closes).
+    @Published var defaultDistro: String = UserDefaults.standard.string(forKey: "defaultDistro") ?? "debian" {
+        didSet { UserDefaults.standard.set(defaultDistro, forKey: "defaultDistro") }
+    }
 
     static let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
     static let rootDir = support.appendingPathComponent("debian", isDirectory: true)
@@ -30,7 +34,7 @@ final class Store: ObservableObject {
     func boot() {
         Store.shared = self
         try? FileManager.default.createDirectory(at: Store.sessionsDir, withIntermediateDirectories: true)
-        if FileManager.default.fileExists(atPath: Store.okFile.path) { ready(); return }
+        if FileManager.default.fileExists(atPath: Store.okFile.path) || Distro.debianRemoved { ready(); return }
         unpack()
     }
 
@@ -63,7 +67,7 @@ final class Store: ObservableObject {
     /// The engine set up once per launch (also when Shortcuts start LxTerm without a window).
     nonisolated(unsafe) private static var engineReady = false
     static func prepareEngine(again: Bool = false) -> Bool {
-        guard FileManager.default.fileExists(atPath: okFile.path) else { return false }
+        guard FileManager.default.fileExists(atPath: okFile.path) || Distro.debianRemoved else { return false }
         if !engineReady || again {                                 // (again: a fresh root after Reset)
             engineReady = true
             lx_engine_init(rootDir.path)
@@ -88,9 +92,9 @@ final class Store: ObservableObject {
         let ids = UserDefaults.standard.stringArray(forKey: Store.idsKey) ?? []
         let fast = Set(UserDefaults.standard.stringArray(forKey: Store.fastKey) ?? [])
         let distros = UserDefaults.standard.dictionary(forKey: Store.distroKey) as? [String: String] ?? [:]
-        sessions = ids.map { id in
+        sessions = ids.compactMap { id in
             let d = Distro.named(distros[id])
-            return Session(id: id, accelerated: fast.contains(id), distro: d.installed ? d : .debian)
+            return d.installed ? Session(id: id, accelerated: fast.contains(id), distro: d) : nil   // (its distribution was removed)
         }
         let args = ProcessInfo.processInfo.arguments
         if args.contains("-accel") || args.contains("-accel2") {     // CI: the accelerated engine
@@ -98,19 +102,21 @@ final class Store: ObservableObject {
             sessions = [Session(accelerated: true)]
             if args.contains("-accel") { DispatchQueue.main.asyncAfter(deadline: .now() + 175) { self.newSession() } }   // a second tab in the same engine
         }
-        if sessions.isEmpty { sessions = [Session()] }
-        selected = min(UserDefaults.standard.integer(forKey: "selected"), sessions.count - 1)
+        if sessions.isEmpty, let d = Distro.preferred { sessions = [makeSession(d)] }
+        selected = max(0, min(UserDefaults.standard.integer(forKey: "selected"), sessions.count - 1))
         persist()
         if ProcessInfo.processInfo.arguments.contains("-shots") { Tour.run(self) }
         if args.contains("-distros") { DistroTest.run(self) }
     }
 
     /// A new tab runs in the accelerated engine when Settings › Accelerated engine is on.
-    private func makeSession(_ d: Distro = .debian) -> Session {
-        Session(accelerated: UserDefaults.standard.bool(forKey: "webEngine"), distro: d)
+    private func makeSession(_ d: Distro) -> Session {
+        Session(accelerated: UserDefaults.standard.bool(forKey: "webEngine") && Distro.debian.installed, distro: d)
     }
 
-    func newSession(_ d: Distro = .debian) {
+    /// A new tab: in `d`, or the default distribution.
+    func newSession(_ d: Distro? = nil) {
+        guard let d = d ?? Distro.preferred else { return }
         sessions.append(makeSession(d))
         selected = sessions.count - 1
         persist()
@@ -120,8 +126,8 @@ final class Store: ObservableObject {
         guard let i = sessions.firstIndex(where: { $0 === s }) else { return }
         s.close()
         sessions.remove(at: i)
-        if sessions.isEmpty { sessions = [makeSession()] }
-        selected = min(selected, sessions.count - 1)
+        if sessions.isEmpty, let d = Distro.preferred { sessions = [makeSession(d)] }   // (the default distribution's)
+        selected = max(0, min(selected, sessions.count - 1))
         persist()
     }
 
@@ -191,7 +197,17 @@ final class Store: ObservableObject {
         UserDefaults.standard.removeObject(forKey: Store.idsKey)
         UserDefaults.standard.removeObject(forKey: Store.fastKey)
         WebEngine.resetRoot()
+        Distro.debianRemoved = false
         unpack()
+    }
+
+    /// After a distribution was removed: its tabs go; with none left, one in the default.
+    func distributionsChanged() {
+        for s in sessions where !s.distro.installed { s.close() }
+        sessions.removeAll { !$0.distro.installed }
+        if sessions.isEmpty, let d = Distro.preferred { sessions = [makeSession(d)] }
+        selected = max(0, min(selected, sessions.count - 1))
+        persist()
     }
 }
 

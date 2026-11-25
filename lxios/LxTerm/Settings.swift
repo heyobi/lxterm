@@ -133,13 +133,19 @@ struct SettingsView: View {
                 }
                 Section {
                     NavigationLink { DistrosView() } label: {
-                        LabeledContent("Distributions", value: DistroManager.shared.installed.map(\.name).joined(separator: ", "))
+                        LabeledContent("Distributions", value: distros.installed.map(\.name).joined(separator: ", "))
+                    }
+                    if !distros.installed.isEmpty {
+                        Picker("Default distribution", selection: $store.defaultDistro) {
+                            ForEach(distros.installed) { d in Text(d.name).tag(d.id) }
+                        }
                     }
                 } footer: {
                     Text("Ubuntu, Alpine Linux, Fedora, AlmaLinux, Rocky Linux, openSUSE and Arch Linux ARM can be downloaded for new tabs, beside Debian.")
                 }
                 Section {
                     Toggle("Accelerated engine (beta)", isOn: $webEngine)
+                        .disabled(!distros.installed.contains(.debian))
                 } footer: {
                     Text("New tabs (marked ⚡) run Debian in WebKit's WebAssembly engine, which compiles programs as they run: long jobs are several times faster. It starts from a copy of your system and keeps its own from then on.")
                 }
