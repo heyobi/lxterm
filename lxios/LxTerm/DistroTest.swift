@@ -47,7 +47,7 @@ enum DistroTest {
                     try? await Task.sleep(for: .seconds(90))
                     type(s, "python3 -m http.server 8124 > /tmp/srv.log 2>&1 &\r")
                 } else if d.id == "fedora" {
-                    type(s, "head -n 2 /etc/os-release; echo shell=$0; rpm -q bash; dnf --version | head -n 1")
+                    type(s, "head -n 2 /etc/os-release; echo shell=$0; rpm -q bash; dnf --version | head -n 1\r")
                     try? await Task.sleep(for: .seconds(30))
                 } else {
                     type(s, "head -n 2 /etc/os-release; echo shell=$0; apt-get update 2>&1 | tail -n 2; apt-get install -y hello 2>&1 | tail -n 1; hello\r")
