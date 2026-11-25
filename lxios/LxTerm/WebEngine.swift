@@ -136,7 +136,7 @@ final class WebEngine: NSObject, WKURLSchemeHandler, WKScriptMessageHandler, WKN
         guard let s = m.body as? String, let d = s.data(using: .utf8),
               let msg = try? JSONSerialization.jsonObject(with: d) as? [String: Any] else { return }
         if let l = msg["log"] as? String {
-            try? logFile?.write(contentsOf: Data((l + "\n").utf8))
+            if WebEngine.debug { try? logFile?.write(contentsOf: Data((l + "\n").utf8)) }   // (CI only: not into the user's Documents)
         } else if msg["ready"] != nil {
             pageReady = true
             if first != nil && !booted { boot() }

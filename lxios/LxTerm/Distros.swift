@@ -18,6 +18,10 @@ struct Distro: Identifiable, Hashable {
         debian,
         Distro(id: "ubuntu", name: "Ubuntu", detail: "26.04 LTS · apt", repo: "library/ubuntu", tag: "26.04", megabytes: 40),
         Distro(id: "alpine", name: "Alpine Linux", detail: "apk", repo: "library/alpine", tag: "latest", megabytes: 4),
+        Distro(id: "fedora", name: "Fedora", detail: "dnf", repo: "library/fedora", tag: "latest", megabytes: 65),
+        Distro(id: "almalinux", name: "AlmaLinux", detail: "10 · dnf", repo: "library/almalinux", tag: "10", megabytes: 64),
+        Distro(id: "rocky", name: "Rocky Linux", detail: "10 · dnf", repo: "rockylinux/rockylinux", tag: "10", megabytes: 66),
+        Distro(id: "opensuse", name: "openSUSE Tumbleweed", detail: "zypper", repo: "opensuse/tumbleweed", tag: "latest", megabytes: 38),
     ]
 
     static func named(_ id: String?) -> Distro { all.first { $0.id == id } ?? debian }

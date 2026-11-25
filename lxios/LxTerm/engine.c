@@ -137,7 +137,7 @@ const char *lx_unpack(const char *archive, const char *dir, unsigned long *files
 }
 
 static const char *const shell_env[] = {
-    "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin", "HOME=/root", "USER=root", "LOGNAME=root",
+    "PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/usr/games", "HOME=/root", "USER=root", "LOGNAME=root",
     "SHELL=/bin/bash", "TERM=xterm-256color", "COLORTERM=truecolor", "LANG=C.UTF-8",
     "PROMPT_COMMAND=history -a",                                   /* the history survives the app being closed */
     "DEBCONF_NOWARNINGS=yes", NULL };

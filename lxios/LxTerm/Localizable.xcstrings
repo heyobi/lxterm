@@ -542,16 +542,6 @@
         }
       }
     },
-    "Ubuntu and Alpine Linux can be downloaded for new tabs, beside Debian.": {
-      "localizations": {
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Debian'ın yanında yeni sekmeler için Ubuntu ve Alpine Linux da indirilebilir."
-          }
-        }
-      }
-    },
     "Ports: servers running in the shells": {
       "localizations": {
         "tr": {
@@ -698,6 +688,16 @@
           "stringUnit": {
             "state": "translated",
             "value": "İleri"
+          }
+        }
+      }
+    },
+    "Ubuntu, Alpine Linux, Fedora, AlmaLinux, Rocky Linux and openSUSE can be downloaded for new tabs, beside Debian.": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Debian'ın yanında yeni sekmeler için Ubuntu, Alpine Linux, Fedora, AlmaLinux, Rocky Linux ve openSUSE de indirilebilir."
           }
         }
       }
