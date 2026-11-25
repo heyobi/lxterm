@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/resource.h>
+#include <sys/socket.h>
 #include <sys/stat.h>
 #include <time.h>
 #include <unistd.h>
@@ -83,6 +84,43 @@ void lx_engine_bind_files(const char *host)
     aoi_proc_bind("/root/Files", host);
 }
 
+void lx_engine_prepare_root(const char *root)
+{
+    char d[1100];
+    write_resolv(root);
+    snprintf(d, sizeof d, "%s/root", root);
+    mkdir(d, 0700);
+    snprintf(d, sizeof d, "%s/root/Files", root);
+    mkdir(d, 0755);
+}
+
+int lx_engine_listening(int *ports, char *names, int max)
+{
+    struct rlimit rl;
+    int fd, n = 0, top = 4096, i;
+    if (!getrlimit(RLIMIT_NOFILE, &rl) && rl.rlim_cur < (rlim_t)top) top = (int)rl.rlim_cur;
+    for (fd = 0; fd < top && n < max; fd++) {
+        int acc = 0, type = 0;
+        socklen_t l = sizeof acc;
+        struct sockaddr_storage sa;
+        socklen_t sl = sizeof sa;
+        int port = 0;
+        if (getsockopt(fd, SOL_SOCKET, SO_ACCEPTCONN, &acc, &l) || !acc) continue;
+        l = sizeof type;
+        if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &l) || type != SOCK_STREAM) continue;
+        if (getsockname(fd, (struct sockaddr *)&sa, &sl)) continue;
+        if (sa.ss_family == AF_INET) port = ntohs(((struct sockaddr_in *)&sa)->sin_port);
+        else if (sa.ss_family == AF_INET6) port = ntohs(((struct sockaddr_in6 *)&sa)->sin6_port);
+        else continue;
+        for (i = 0; i < n && ports[i] != port; i++) {}
+        if (!port || i < n) continue;                              /* (IPv4 and IPv6 on one port: once) */
+        ports[n] = port;
+        if (aoi_proc_listener_name(port, names + 40 * n, 40)) names[40 * n] = 0;
+        n++;
+    }
+    return n;
+}
+
 const char *lx_unpack(const char *archive, const char *dir, unsigned long *files,
                       void (*progress)(void *ctx, double f), void *ctx)
 {
@@ -111,7 +149,7 @@ static void *sess_main(void *arg)
     return NULL;
 }
 
-lx_session *lx_session_start(const char *snap, int cols, int rows,
+lx_session *lx_session_start(const char *root, const char *snap, int cols, int rows,
                              void (*out)(void *ctx, const char *s, size_t n),
                              void (*exited)(void *ctx), void *ctx, int *resumed)
 {
@@ -119,17 +157,28 @@ lx_session *lx_session_start(const char *snap, int cols, int rows,
     pthread_t th;
     pthread_attr_t at;
     const char *argv[] = { "/bin/bash", "-l", NULL };
+    const char *env[sizeof shell_env / sizeof *shell_env];
+    char bash[1100];
+    struct stat bs;
+    size_t k;
+    if (!root || !*root) root = g_root;
+    for (k = 0; k < sizeof shell_env / sizeof *shell_env; k++) env[k] = shell_env[k];
+    snprintf(bash, sizeof bash, "%s/bin/bash", root);
+    if (lstat(bash, &bs)) {                                        /* no bash (Alpine): its own shell */
+        argv[0] = "/bin/sh";
+        for (k = 0; env[k]; k++) if (!strncmp(env[k], "SHELL=", 6)) env[k] = "SHELL=/bin/sh";
+    }
     if (!s || !(s->p = calloc(1, sizeof *s->p))) { free(s); return NULL; }
     s->out = out; s->exited = exited; s->ctx = ctx;
     snprintf(s->snap, sizeof s->snap, "%s", snap ? snap : "");
     if (!(s->tty = aoi_tty_new(out, ctx, cols, rows))) { free(s->p); free(s); return NULL; }
     *resumed = 0;
-    if (snap && *snap && aoi_snap_this_build(snap) && !aoi_snap_load(s->p, snap, g_root, NULL)) {
+    if (snap && *snap && aoi_snap_this_build(snap) && !aoi_snap_load(s->p, snap, root, NULL)) {
         aoi_proc_attach_tty_to(s->p, s->tty);                     /* its terminal is this session's now */
         *resumed = 1;
     } else {
         memset(s->p, 0, sizeof *s->p);
-        if (aoi_proc_exec(s->p, g_root, argv[0], 2, argv, shell_env)) { free(s->p); free(s); return NULL; }
+        if (aoi_proc_exec(s->p, root, argv[0], 2, argv, env)) { free(s->p); free(s); return NULL; }
         aoi_proc_linux(s->p, "/root");
         aoi_proc_attach_tty_to(s->p, s->tty);
     }

@@ -17,6 +17,7 @@ final class Store: ObservableObject {
     private static let okFile = rootDir.appendingPathComponent(".lxterm-ok")
     private static let idsKey = "sessionIDs"
     private static let fastKey = "acceleratedIDs"
+    private static let distroKey = "sessionDistros"
 
     var current: Session? { sessions.indices.contains(selected) ? sessions[selected] : nil }
 
@@ -60,10 +61,15 @@ final class Store: ObservableObject {
         lx_engine_init(Store.rootDir.path)
         lx_engine_bind_files(SharedFiles.shared.root.path)
         FilesDomain.register()
+        Ports.shared.start()
         phase = .ready
         let ids = UserDefaults.standard.stringArray(forKey: Store.idsKey) ?? []
         let fast = Set(UserDefaults.standard.stringArray(forKey: Store.fastKey) ?? [])
-        sessions = ids.map { Session(id: $0, accelerated: fast.contains($0)) }
+        let distros = UserDefaults.standard.dictionary(forKey: Store.distroKey) as? [String: String] ?? [:]
+        sessions = ids.map { id in
+            let d = Distro.named(distros[id])
+            return Session(id: id, accelerated: fast.contains(id), distro: d.installed ? d : .debian)
+        }
         let args = ProcessInfo.processInfo.arguments
         if args.contains("-accel") || args.contains("-accel2") {     // CI: the accelerated engine
             UserDefaults.standard.set(true, forKey: "webEngine")
@@ -74,15 +80,16 @@ final class Store: ObservableObject {
         selected = min(UserDefaults.standard.integer(forKey: "selected"), sessions.count - 1)
         persist()
         if ProcessInfo.processInfo.arguments.contains("-shots") { Tour.run(self) }
+        if args.contains("-distros") { DistroTest.run(self) }
     }
 
     /// A new tab runs in the accelerated engine when Settings › Accelerated engine is on.
-    private func makeSession() -> Session {
-        Session(accelerated: UserDefaults.standard.bool(forKey: "webEngine"))
+    private func makeSession(_ d: Distro = .debian) -> Session {
+        Session(accelerated: UserDefaults.standard.bool(forKey: "webEngine"), distro: d)
     }
 
-    func newSession() {
-        sessions.append(makeSession())
+    func newSession(_ d: Distro = .debian) {
+        sessions.append(makeSession(d))
         selected = sessions.count - 1
         persist()
     }
@@ -104,6 +111,7 @@ final class Store: ObservableObject {
     private func persist() {
         UserDefaults.standard.set(sessions.map(\.id), forKey: Store.idsKey)
         UserDefaults.standard.set(sessions.filter(\.accelerated).map(\.id), forKey: Store.fastKey)
+        UserDefaults.standard.set(Dictionary(uniqueKeysWithValues: sessions.filter { !$0.distro.builtIn }.map { ($0.id, $0.distro.id) }), forKey: Store.distroKey)
         UserDefaults.standard.set(selected, forKey: "selected")
     }
 

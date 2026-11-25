@@ -70,6 +70,13 @@ struct SettingsView: View {
                     .labelsHidden()
                 }
                 Section {
+                    NavigationLink { DistrosView() } label: {
+                        LabeledContent("Distributions", value: DistroManager.shared.installed.map(\.name).joined(separator: ", "))
+                    }
+                } footer: {
+                    Text("Ubuntu and Alpine Linux can be downloaded for new tabs, beside Debian.")
+                }
+                Section {
                     Toggle("Accelerated engine (beta)", isOn: $webEngine)
                 } footer: {
                     Text("New tabs (marked ⚡) run Debian in WebKit's WebAssembly engine, which compiles programs as they run: long jobs are several times faster. It starts from a copy of your system and keeps its own from then on.")

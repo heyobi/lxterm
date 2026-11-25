@@ -10,6 +10,8 @@ final class Session: NSObject, ObservableObject, Identifiable, TerminalViewDeleg
     /// Runs in the accelerated engine (WebEngine: WebAssembly in WebKit, JIT-compiled) instead
     /// of the interpreter. Its root is the engine's own copy, kept by the engine.
     let accelerated: Bool
+    /// The distribution it runs (Distros.swift); Debian unless chosen otherwise.
+    let distro: Distro
     private(set) var webID: Int?                 // its session in the accelerated engine
     private var webRunning: Bool { webID != nil }
     static var accelTabs = 0                      // (CI: -accel)
@@ -28,10 +30,12 @@ final class Session: NSObject, ObservableObject, Identifiable, TerminalViewDeleg
     private var history = [UInt8]()              // the last output, replayed on resume
     private static let historyMax = 256 * 1024
 
-    init(id: String = UUID().uuidString, accelerated: Bool = false) {
+    init(id: String = UUID().uuidString, accelerated: Bool = false, distro: Distro = .debian) {
         self.id = id
-        self.accelerated = accelerated
+        self.distro = distro
+        self.accelerated = accelerated && distro.builtIn           // (the accelerated engine runs Debian)
         super.init()
+        if !distro.builtIn { title = distro.name.components(separatedBy: " ").first ?? distro.name }
     }
 
     var snapPath: String { Store.sessionsDir.appendingPathComponent("\(id).snap").path }
@@ -117,7 +121,7 @@ final class Session: NSObject, ObservableObject, Identifiable, TerminalViewDeleg
         if FileManager.default.fileExists(atPath: snapPath), let log = try? Data(contentsOf: logPath) {
             history = [UInt8](log.suffix(Session.historyMax))
         }
-        handle = lx_session_start(snapPath, cols, rows, { ctx, s, n in
+        handle = lx_session_start(distro.builtIn ? nil : distro.root.path, snapPath, cols, rows, { ctx, s, n in
             guard let ctx, let s else { return }
             Unmanaged<Session>.fromOpaque(ctx).takeUnretainedValue().output(UnsafeRawPointer(s), n)
         }, { ctx in
@@ -209,7 +213,8 @@ final class Session: NSObject, ObservableObject, Identifiable, TerminalViewDeleg
         guard let handle else { return }
         var buf = [CChar](repeating: 0, count: 64)
         lx_session_title(handle, &buf, 64)
-        let t = String(cString: buf)
+        var t = String(cString: buf)
+        if !distro.builtIn, t == "bash" || t == "sh" || t == "busybox" { t = distro.name.components(separatedBy: " ").first ?? distro.name }
         if t != title { title = t }
     }
 

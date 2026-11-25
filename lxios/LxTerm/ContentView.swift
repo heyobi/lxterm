@@ -64,11 +64,13 @@ struct MainView: View {
     @State private var showSettings = false
     @State private var themeTick = 0
     @State private var browser: BrowserPage?
+    @State private var showPorts = false
+    @ObservedObject private var ports = Ports.shared
 
     var body: some View {
         let theme = Theme.current
         VStack(spacing: 0) {
-            TabStrip(showSettings: $showSettings, browser: $browser)
+            TabStrip(showSettings: $showSettings, showPorts: $showPorts)
             GeometryReader { proxy in
                 let fold = foldFrame(proxy)
                 if let fold, fold.width > fold.height {                // laptop: above the fold
@@ -88,7 +90,21 @@ struct MainView: View {
         }
         .background(Color(theme.background).ignoresSafeArea())
         .preferredColorScheme(theme.isDark ? .dark : .light)
+        .overlay(alignment: .top) {
+            if let p = ports.announced {
+                PortToast(port: p, open: { ports.announced = nil; browser = BrowserPage(url: Ports.url(p.port)) },
+                          close: { ports.announced = nil })
+                    .padding(.top, 50)
+                    .transition(.move(edge: .top).combined(with: .opacity))
+                    .task(id: p.port) { try? await Task.sleep(for: .seconds(8)); if ports.announced == p { ports.announced = nil } }
+            }
+        }
+        .animation(.spring(duration: 0.3), value: ports.announced)
         .sheet(isPresented: $showSettings) { SettingsView().environmentObject(store) }
+        .sheet(isPresented: $showPorts) {
+            PortsView { u in DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { browser = BrowserPage(url: u) } }
+                .presentationDetents([.medium, .large])
+        }
         .fullScreenCover(item: $browser) { BrowserView(url: $0.url) }
         .onReceive(NotificationCenter.default.publisher(for: .lxOpenBrowser)) { n in
             if let u = n.object as? URL { browser = BrowserPage(url: BrowserView.local(u) ?? u) }
@@ -121,7 +137,8 @@ struct MainView: View {
 struct TabStrip: View {
     @EnvironmentObject var store: Store
     @Binding var showSettings: Bool
-    @Binding var browser: BrowserPage?
+    @Binding var showPorts: Bool
+    @ObservedObject private var ports = Ports.shared
 
     var body: some View {
         HStack(spacing: 8) {
@@ -138,10 +155,17 @@ struct TabStrip: View {
                 if let v = store.current?.view { _ = v.isFirstResponder ? v.resignFirstResponder() : v.becomeFirstResponder() }
             } label: { Image(systemName: "keyboard") }
                 .accessibilityLabel(Text("Show or hide the keyboard"))
-            Button { browser = BrowserPage(url: URL(string: "http://localhost:8000")!) } label: { Image(systemName: "globe") }
-                .accessibilityLabel(Text("Browser for servers in Debian"))
-            Button { store.newSession() } label: { Image(systemName: "plus") }
-                .accessibilityLabel(Text("New shell"))
+            Button { showPorts = true } label: {
+                Image(systemName: "dot.radiowaves.left.and.right")
+                    .overlay(alignment: .topTrailing) {
+                        if !ports.list.isEmpty {
+                            Text("\(ports.list.count)").font(.system(size: 10, weight: .bold)).foregroundStyle(.white)
+                                .padding(.horizontal, 4).background(Capsule().fill(.green)).offset(x: 9, y: -7)
+                        }
+                    }
+            }
+            .accessibilityLabel(Text("Ports: servers running in the shells"))
+            NewTabButton()
             Button { showSettings = true } label: { Image(systemName: "gearshape") }
                 .accessibilityLabel(Text("Settings"))
                 .padding(.trailing, 12)
@@ -149,6 +173,37 @@ struct TabStrip: View {
         .font(.system(size: 17, weight: .medium))
         .frame(height: 44)
         .background(.bar)
+    }
+}
+
+/// "+": a new Debian shell; with other distributions downloaded, a menu of them.
+struct NewTabButton: View {
+    @EnvironmentObject var store: Store
+    @State private var showDistros = false
+    @ObservedObject private var distros = DistroManager.shared
+
+    var body: some View {
+        let others = distros.installed.filter { !$0.builtIn }
+        Group {
+            if others.isEmpty {
+                Button { store.newSession() } label: { Image(systemName: "plus") }
+            } else {
+                Menu {
+                    ForEach([Distro.debian] + others) { d in
+                        Button(d.name) { store.newSession(d) }
+                    }
+                    Divider()
+                    Button("Get more…") { showDistros = true }
+                } label: { Image(systemName: "plus") }
+            }
+        }
+        .accessibilityLabel(Text("New shell"))
+        .sheet(isPresented: $showDistros) {
+            NavigationStack {
+                DistrosView().toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showDistros = false } } }
+            }
+            .environmentObject(store)
+        }
     }
 }
 
@@ -160,7 +215,7 @@ struct TabChip: View {
 
     var body: some View {
         HStack(spacing: 6) {
-            Image(systemName: session.exited ? "stop.circle" : session.accelerated ? "bolt.fill" : "terminal").font(.caption)
+            Image(systemName: session.exited ? "stop.circle" : session.accelerated ? "bolt.fill" : session.distro.builtIn ? "terminal" : "shippingbox").font(.caption)
             Text(session.title).font(.subheadline.weight(selected ? .semibold : .regular)).lineLimit(1)
             if selected {
                 Button(action: close) { Image(systemName: "xmark").font(.caption2.bold()) }

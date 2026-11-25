@@ -1,0 +1,264 @@
+import CryptoKit
+import Foundation
+
+/// The distributions a tab can run. Debian comes with the app; the others are each
+/// project's official arm64 image, downloaded when chosen in Settings › Distributions:
+/// from Docker Hub's registry, where the image manifest and every layer are
+/// content-addressed and each is checked against its SHA-256 digest before it is used.
+struct Distro: Identifiable, Hashable {
+    let id: String
+    let name: String
+    let detail: String          // version and package manager, shown in Settings
+    let repo: String            // registry repository ("library/ubuntu"); "" for the bundled one
+    let tag: String
+    let megabytes: Int          // about how much is downloaded
+
+    static let debian = Distro(id: "debian", name: "Debian", detail: "13 · apt", repo: "", tag: "", megabytes: 0)
+    static let all: [Distro] = [
+        debian,
+        Distro(id: "ubuntu", name: "Ubuntu", detail: "26.04 LTS · apt", repo: "library/ubuntu", tag: "26.04", megabytes: 40),
+        Distro(id: "alpine", name: "Alpine Linux", detail: "apk", repo: "library/alpine", tag: "latest", megabytes: 4),
+    ]
+
+    static func named(_ id: String?) -> Distro { all.first { $0.id == id } ?? debian }
+
+    var builtIn: Bool { repo.isEmpty }
+    static let dir = Store.support.appendingPathComponent("distros", isDirectory: true)
+    var root: URL { builtIn ? Store.rootDir : Distro.dir.appendingPathComponent(id, isDirectory: true) }
+    private var okFile: URL { root.appendingPathComponent(".lxterm-ok") }
+    var installed: Bool { FileManager.default.fileExists(atPath: okFile.path) }
+
+    static var installed: [Distro] { all.filter(\.installed) }
+
+    func remove() {
+        guard !builtIn else { return }
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    /// Bytes used on this iPhone (slow for big trees: call off the main thread).
+    func diskUsage() -> Int64 {
+        guard let e = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.totalFileAllocatedSizeKey, .isRegularFileKey],
+                                                     options: [], errorHandler: nil) else { return 0 }
+        var n: Int64 = 0
+        for case let u as URL in e {
+            if let v = try? u.resourceValues(forKeys: [.totalFileAllocatedSizeKey]), let s = v.totalFileAllocatedSize { n += Int64(s) }
+        }
+        return n
+    }
+
+    enum Failure: LocalizedError {
+        case http(Int, String), noArm64, digest(String), format(String), unpack(String)
+        var errorDescription: String? {
+            switch self {
+            case .http(let c, let what): return String(localized: "The download failed (HTTP \(c), \(what)).")
+            case .noArm64: return String(localized: "The image has no arm64 version.")
+            case .digest(let what): return String(localized: "The checksum of \(what) does not match: the download was not used.")
+            case .format(let t): return String(localized: "Unsupported image format: \(t)")
+            case .unpack(let e): return String(localized: "Could not unpack: \(e)")
+            }
+        }
+    }
+
+    /// Downloads, verifies and unpacks the image into `root`. progress: 0...1.
+    func install(progress: @escaping @Sendable (Double) -> Void) async throws {
+        let fm = FileManager.default
+        let tmpRoot = Distro.dir.appendingPathComponent(".\(id)-new", isDirectory: true)
+        try? fm.removeItem(at: tmpRoot)
+        try fm.createDirectory(at: tmpRoot, withIntermediateDirectories: true)
+        defer { try? fm.removeItem(at: tmpRoot) }
+        let reg = Registry(repo: repo)
+        try await reg.login()
+        let manifest = try await reg.arm64Manifest(tag: tag)
+        let total = max(1, manifest.layers.reduce(0) { $0 + $1.size })
+        var done: Int64 = 0
+        for layer in manifest.layers {
+            guard layer.mediaType.hasSuffix("gzip") else { throw Failure.format(layer.mediaType) }
+            let base = done
+            let file = try await reg.blob(layer.digest) { got in progress(0.9 * Double(base + got) / Double(total)) }
+            defer { try? fm.removeItem(at: file) }
+            guard try Distro.sha256(file) == layer.digest else { throw Failure.digest(String(layer.digest.prefix(19))) }
+            done += layer.size
+            try Distro.unpack(file, into: tmpRoot)
+            Distro.applyWhiteouts(tmpRoot)
+        }
+        progress(0.95)
+        try? fm.removeItem(at: root)
+        try fm.moveItem(at: tmpRoot, to: root)
+        lx_engine_prepare_root(root.path)
+        try Data("\(repo):\(tag) \(manifest.digest)\n".utf8).write(to: root.appendingPathComponent(".lxterm-image"))
+        fm.createFile(atPath: okFile.path, contents: nil)
+        progress(1)
+    }
+
+    static func sha256(_ file: URL) throws -> String {
+        let h = try FileHandle(forReadingFrom: file)
+        defer { try? h.close() }
+        var sha = SHA256()
+        while let d = try h.read(upToCount: 1 << 20), !d.isEmpty { sha.update(data: d) }
+        return "sha256:" + sha.finalize().map { String(format: "%02x", $0) }.joined()
+    }
+
+    static func unpack(_ file: URL, into dir: URL) throws {
+        var files: UInt = 0
+        if let err = lx_unpack(file.path, dir.path, &files, nil, nil) { throw Failure.unpack(String(cString: err)) }
+    }
+
+    /// Layered images (OCI): a ".wh.NAME" file deletes NAME of the layers below, and
+    /// ".wh..wh..opq" empties its folder of them.
+    static func applyWhiteouts(_ root: URL) {
+        let fm = FileManager.default
+        guard let e = fm.enumerator(at: root, includingPropertiesForKeys: nil, options: []) else { return }
+        var marks: [URL] = []
+        for case let u as URL in e where u.lastPathComponent.hasPrefix(".wh.") { marks.append(u) }
+        for m in marks {
+            let name = m.lastPathComponent
+            let dir = m.deletingLastPathComponent()
+            if name == ".wh..wh..opq" {
+                for c in (try? fm.contentsOfDirectory(at: dir, includingPropertiesForKeys: nil)) ?? [] where !c.lastPathComponent.hasPrefix(".wh.") {
+                    try? fm.removeItem(at: c)
+                }
+            } else {
+                try? fm.removeItem(at: dir.appendingPathComponent(String(name.dropFirst(4))))
+            }
+            try? fm.removeItem(at: m)
+        }
+    }
+}
+
+/// Docker Hub's registry (the OCI distribution API), anonymous pulls.
+private final class Registry: NSObject, URLSessionDownloadDelegate {
+    struct Layer: Decodable { let mediaType: String; let digest: String; let size: Int64 }
+    struct Manifest { let digest: String; let layers: [Layer] }
+
+    let repo: String
+    private var token = ""
+    private var onProgress: ((Int64) -> Void)?
+    private var finished: CheckedContinuation<URL, Error>?
+    private lazy var session = URLSession(configuration: .default, delegate: self, delegateQueue: nil)
+
+    init(repo: String) { self.repo = repo }
+
+    private var base: String { "https://registry-1.docker.io/v2/\(repo)" }
+
+    func login() async throws {
+        struct T: Decodable { let token: String }
+        let url = URL(string: "https://auth.docker.io/token?service=registry.docker.io&scope=repository:\(repo):pull")!
+        let (d, r) = try await URLSession.shared.data(from: url)
+        try check(r, "token")
+        token = try JSONDecoder().decode(T.self, from: d).token
+    }
+
+    private func get(_ path: String, accept: String) async throws -> (Data, String) {
+        var req = URLRequest(url: URL(string: base + path)!)
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        req.setValue(accept, forHTTPHeaderField: "Accept")
+        let (d, r) = try await URLSession.shared.data(for: req)
+        try check(r, "manifest")
+        return (d, (r as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Type") ?? "")
+    }
+
+    private func check(_ r: URLResponse, _ what: String) throws {
+        let c = (r as? HTTPURLResponse)?.statusCode ?? 0
+        if c != 200 { throw Distro.Failure.http(c, what) }
+    }
+
+    func arm64Manifest(tag: String) async throws -> Manifest {
+        struct Entry: Decodable {
+            struct P: Decodable { let architecture: String?; let os: String? }
+            let digest: String; let mediaType: String?; let platform: P?
+        }
+        struct Index: Decodable { let manifests: [Entry]?; let layers: [Layer]? }
+        let anyIndex = "application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json"
+        let anyManifest = "application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json"
+        let (d, _) = try await get("/manifests/\(tag)", accept: anyIndex + ", " + anyManifest)
+        let idx = try JSONDecoder().decode(Index.self, from: d)
+        guard let e = idx.manifests?.first(where: { $0.platform?.architecture == "arm64" && $0.platform?.os == "linux" }) else {
+            throw Distro.Failure.noArm64
+        }
+        let (md, _) = try await get("/manifests/\(e.digest)", accept: e.mediaType ?? anyManifest)
+        let got = "sha256:" + SHA256.hash(data: md).map { String(format: "%02x", $0) }.joined()
+        guard got == e.digest else { throw Distro.Failure.digest("manifest") }
+        let m = try JSONDecoder().decode(Index.self, from: md)
+        return Manifest(digest: e.digest, layers: m.layers ?? [])
+    }
+
+    /// A layer, downloaded to a temporary file (the registry redirects to its CDN).
+    func blob(_ digest: String, progress: @escaping (Int64) -> Void) async throws -> URL {
+        var req = URLRequest(url: URL(string: base + "/blobs/\(digest)")!)
+        req.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        onProgress = progress
+        return try await withCheckedThrowingContinuation { c in
+            finished = c
+            session.downloadTask(with: req).resume()
+        }
+    }
+
+    func urlSession(_ s: URLSession, downloadTask t: URLSessionDownloadTask, didWriteData _: Int64, totalBytesWritten w: Int64, totalBytesExpectedToWrite _: Int64) {
+        onProgress?(w)
+    }
+
+    func urlSession(_ s: URLSession, downloadTask t: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
+        let code = (t.response as? HTTPURLResponse)?.statusCode ?? 0
+        guard code == 200 else { finished?.resume(throwing: Distro.Failure.http(code, "layer")); finished = nil; return }
+        let keep = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString + ".tar.gz")
+        do { try FileManager.default.moveItem(at: location, to: keep); finished?.resume(returning: keep) }
+        catch { finished?.resume(throwing: error) }
+        finished = nil
+    }
+
+    func urlSession(_ s: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        if let error { finished?.resume(throwing: error); finished = nil }
+    }
+
+    // the redirect to the CDN must not carry the registry's token
+    func urlSession(_ s: URLSession, task: URLSessionTask, willPerformHTTPRedirection r: HTTPURLResponse, newRequest: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) {
+        var n = newRequest
+        if n.url?.host != "registry-1.docker.io" { n.setValue(nil, forHTTPHeaderField: "Authorization") }
+        completionHandler(n)
+    }
+}
+
+/// Downloads in progress and what is installed, for Settings › Distributions and "+".
+@MainActor
+final class DistroManager: ObservableObject {
+    static let shared = DistroManager()
+    @Published private(set) var installed: [Distro] = Distro.installed
+    @Published private(set) var progress: [String: Double] = [:]
+    @Published var failure: String?
+    @Published private(set) var sizes: [String: Int64] = [:]
+
+    func download(_ d: Distro) {
+        guard progress[d.id] == nil else { return }
+        progress[d.id] = 0
+        Task.detached(priority: .userInitiated) {
+            do {
+                try await d.install { f in Task { @MainActor in if DistroManager.shared.progress[d.id] != nil { DistroManager.shared.progress[d.id] = f } } }
+                await MainActor.run { DistroManager.shared.finished(d, nil) }
+            } catch {
+                await MainActor.run { DistroManager.shared.finished(d, error) }
+            }
+        }
+    }
+
+    private func finished(_ d: Distro, _ e: Error?) {
+        progress[d.id] = nil
+        if let e { failure = "\(d.name): \(e.localizedDescription)" }
+        refresh()
+    }
+
+    func remove(_ d: Distro) {
+        d.remove()
+        refresh()
+    }
+
+    func refresh() {
+        installed = Distro.installed
+        let list = installed
+        Task.detached(priority: .utility) {
+            var s: [String: Int64] = [:]
+            for d in list { s[d.id] = d.diskUsage() }
+            await MainActor.run { DistroManager.shared.sizes = s }
+        }
+    }
+}

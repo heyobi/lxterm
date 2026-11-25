@@ -15,16 +15,21 @@ void lx_engine_trace(const char *path);
 void lx_engine_init(const char *root);
 /* The guest's /root/Files is `host` (the folder shared with the Files app). */
 void lx_engine_bind_files(const char *host);
+/* Another distribution's root, before its first session: DNS servers, /root/Files. */
+void lx_engine_prepare_root(const char *root);
+/* The TCP ports listened on in this app (servers in any shell, either engine): up to max
+ * ports, each with the program that listens in names (40 bytes each, "" if unknown). Returns how many. */
+int lx_engine_listening(int *ports, char *names, int max);
 
 /* Unpacks a .tar.gz root into dir. NULL, or what went wrong; *files counts regular files,
  * progress (0..1, from the archive's bytes read) is called now and then. */
 const char *lx_unpack(const char *archive, const char *dir, unsigned long *files,
                       void (*progress)(void *ctx, double f), void *ctx);
 
-/* Starts a session: resumes the shell from snap (if it exists and is from this build),
- * else starts /bin/bash -l. out gets the terminal's output (any thread); exited is called
+/* Starts a session in root (NULL: the one of lx_engine_init): resumes the shell from snap (if it exists and is from this build),
+ * else starts /bin/bash -l (/bin/sh -l where there is no bash). out gets the terminal's output (any thread); exited is called
  * when the shell ends. *resumed tells which happened. NULL on failure. */
-lx_session *lx_session_start(const char *snap, int cols, int rows,
+lx_session *lx_session_start(const char *root, const char *snap, int cols, int rows,
                              void (*out)(void *ctx, const char *s, size_t n),
                              void (*exited)(void *ctx), void *ctx, int *resumed);
 void lx_session_input(lx_session *s, const char *b, size_t n);
