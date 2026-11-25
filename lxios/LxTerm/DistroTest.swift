@@ -31,7 +31,7 @@ enum DistroTest {
                 try? await Task.sleep(for: .seconds(15))
                 type(deb, "cd /tmp && python3 -m http.server 8123 > /tmp/srv.log 2>&1 & sleep 6; curl -sI http://127.0.0.1:8123/ | head -n 1; cat /tmp/srv.log\r")
             }
-            for d in Distro.all where ["ubuntu", "alpine", "fedora", "arch"].contains(d.id) {
+            for d in Distro.all where ["ubuntu", "alpine", "fedora", "almalinux", "arch"].contains(d.id) {
                 let t0 = Date()
                 do {
                     try await d.install { _ in }
@@ -50,6 +50,16 @@ enum DistroTest {
                     try? await Task.sleep(for: .seconds(240))           // (its setup runs in the tab first)
                     type(s, "head -n 2 /etc/os-release; pacman -Q | wc -l; pacman -Qk pacman | tail -n 1\r")
                     try? await Task.sleep(for: .seconds(20))
+                } else if d.id == "almalinux" {
+                    try? await Task.sleep(for: .seconds(15))
+                    type(s, "head -n 2 /etc/os-release; echo alma-ok\r")
+                    try? await Task.sleep(for: .seconds(10))
+                    let r = d.root.path
+                    for f in ["bin", "usr/bin/bash", "bin/bash", "lib/ld-linux-aarch64.so.1", "usr/lib/ld-linux-aarch64.so.1", "etc/profile"] {
+                        let a = (try? FileManager.default.attributesOfItem(atPath: r + "/" + f)) ?? [:]
+                        let link = (try? FileManager.default.destinationOfSymbolicLink(atPath: r + "/" + f)) ?? ""
+                        log("alma \(f): \(a[.type] as? String ?? "missing") \(a[.size] as? Int ?? -1) \(link)")
+                    }
                 } else if d.id == "fedora" {
                     type(s, "head -n 2 /etc/os-release; echo shell=$0; rpm -q bash; dnf --version | head -n 1\r")
                     try? await Task.sleep(for: .seconds(30))

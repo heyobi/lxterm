@@ -1451,6 +1451,16 @@
           }
         }
       }
+    },
+    "The shell could not be started (%@ in %@). Reset the distribution in Settings › Distributions.": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kabuk başlatılamadı (%2$@ içinde %1$@). Dağıtımı Ayarlar › Dağıtımlar'dan sıfırlayın."
+          }
+        }
+      }
     }
   }
 }

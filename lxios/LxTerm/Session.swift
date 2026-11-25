@@ -149,6 +149,11 @@ final class Session: NSObject, ObservableObject, Identifiable, TerminalViewDeleg
             DispatchQueue.main.async { me.shellEnded() }
         }, ctx, &res)
         resumed = res != 0
+        if handle == nil {                                         // (no blank tab: say why)
+            let root = distro.root.path
+            let sh = FileManager.default.fileExists(atPath: root + "/bin/bash") ? "/bin/bash" : "/bin/sh"
+            notice(String(localized: "The shell could not be started (\(sh) in \(distro.name)). Reset the distribution in Settings › Distributions."))
+        }
         if let size, let handle { lx_session_resize(handle, Int32(size.cols), Int32(size.rows)) }
         if ProcessInfo.processInfo.arguments.contains("-demo"), !resumed { demo() }
         if resumed, !history.isEmpty {
