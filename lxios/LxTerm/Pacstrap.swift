@@ -123,10 +123,14 @@ enum Pacstrap {
         update-ca-trust
         # no Landlock or seccomp in this kernel layer (as in WSL1 and many containers): pacman's setting for that
         grep -q '^DisableSandbox' /etc/pacman.conf || sed -i '/^\\[options\\]/a DisableSandbox' /etc/pacman.conf
+        # mirrors with valid HTTPS first, Arch Linux ARM's redirector last
+        printf 'Server = https://de3.mirror.archlinuxarm.org/$arch/$repo\\nServer = https://fl.us.mirror.archlinuxarm.org/$arch/$repo\\nServer = https://ca.us.mirror.archlinuxarm.org/$arch/$repo\\nServer = http://mirror.archlinuxarm.org/$arch/$repo\\n' > /etc/pacman.d/mirrorlist
         pacman-key --init && pacman-key --populate archlinuxarm
         pacman -Sy --noconfirm
         # pacman records the packages installed from its cache, checking their signatures
-        pacman -S --noconfirm --needed --dbonly \(names)
+        pacman -S --noconfirm --needed --dbonly \(names) || pacman -Sy --noconfirm --needed --dbonly \(names)
+        # filesystem again, the usual way: its install script (/etc/os-release and the rest)
+        pacman -S --noconfirm filesystem
         rm -f /.lxterm-firstrun /tmp/lxterm-setup.sh
         echo "Arch Linux ARM is ready. Install more with: pacman -S <package>"
 
