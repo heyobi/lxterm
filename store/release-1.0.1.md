@@ -50,7 +50,15 @@ Last paragraph:
 LxTerm is free and open source (GPL-3.0), with no ads and no in-app purchases. Debian is a registered trademark of Software in the Public Interest, Inc. The other distributions' names are trademarks of their owners. LxTerm is not affiliated with or endorsed by any of these projects.
 
 ## Unchanged
-Name (LxTerm Shell), subtitle, keywords (no other project's name in them), promo text, privacy answers (still no data collected), age rating.
+Name (LxTerm Shell), subtitle, promo text, privacy answers (still no data collected), age rating.
+
+## Keywords (search reads name, subtitle and keywords, not the description)
+- en-US: debian,arch,alpine,ssh,bash,python,pip,apt,dnf,pacman,tmux,git,vim,unix,console,coding,server,cli
+- tr: debian,arch,alpine,ssh,bash,python,pip,apt,dnf,pacman,tmux,git,komut,konsol,unix,kodlama,sunucu,cli
+- es-MX: debian,arch,alpine,ssh,bash,python,pip,apt,dnf,pacman,tmux,git,comandos,consola,unix,servidor,cli
+- pt-BR: debian,arch,alpine,ssh,bash,python,pip,apt,dnf,pacman,tmux,git,comandos,console,unix,servidor,cli
+- de-DE: debian,arch,alpine,ssh,bash,python,pip,apt,dnf,pacman,tmux,git,kommandozeile,konsole,unix,server
+Only low-risk names: debian (shipped in the app; Debian's trademark policy allows descriptive use), arch and alpine (also ordinary words). No ubuntu, fedora, almalinux, rocky.
 
 ## Review notes — added
 7. Distributions (Settings › Distributions): downloads the official arm64 images of Ubuntu, Alpine, Fedora, AlmaLinux, Rocky Linux and openSUSE from Docker Hub (digests checked), and Arch Linux ARM's packages from its own mirrors, only when the user taps Download. They run in the same interpreter; no code of the app changes.
