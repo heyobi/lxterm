@@ -35,13 +35,17 @@ struct Distro: Identifiable, Hashable {
         try? FileManager.default.removeItem(at: root)
     }
 
-    /// Bytes used on this iPhone (slow for big trees: call off the main thread).
+    /// Bytes used on this iPhone (slow for big trees: call off the main thread). Hard links
+    /// (Ubuntu's coreutils are one program under a hundred names) count once.
     func diskUsage() -> Int64 {
-        guard let e = FileManager.default.enumerator(at: root, includingPropertiesForKeys: [.totalFileAllocatedSizeKey, .isRegularFileKey],
-                                                     options: [], errorHandler: nil) else { return 0 }
+        guard let e = FileManager.default.enumerator(atPath: root.path) else { return 0 }
         var n: Int64 = 0
-        for case let u as URL in e {
-            if let v = try? u.resourceValues(forKeys: [.totalFileAllocatedSizeKey]), let s = v.totalFileAllocatedSize { n += Int64(s) }
+        var seen = Set<UInt64>()
+        while let rel = e.nextObject() as? String {
+            var st = stat()
+            guard lstat(root.path + "/" + rel, &st) == 0 else { continue }
+            if st.st_nlink > 1, !seen.insert(UInt64(st.st_ino)).inserted { continue }
+            n += Int64(st.st_blocks) * 512
         }
         return n
     }

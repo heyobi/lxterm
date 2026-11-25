@@ -6,6 +6,7 @@
 #include "untar.h"
 
 #include <arpa/inet.h>
+#include <errno.h>
 #include <pthread.h>
 #include <resolv.h>
 #include <stdio.h>
@@ -105,13 +106,21 @@ int lx_engine_listening(int *ports, char *names, int max)
         struct sockaddr_storage sa;
         socklen_t sl = sizeof sa;
         int port = 0;
-        if (getsockopt(fd, SOL_SOCKET, SO_ACCEPTCONN, &acc, &l) || !acc) continue;
+        struct sockaddr_storage peer;
+        socklen_t pl = sizeof peer;
+        int known;
         l = sizeof type;
         if (getsockopt(fd, SOL_SOCKET, SO_TYPE, &type, &l) || type != SOCK_STREAM) continue;
+        l = sizeof acc;
+        known = !getsockopt(fd, SOL_SOCKET, SO_ACCEPTCONN, &acc, &l);
+        if (known && !acc) continue;
         if (getsockname(fd, (struct sockaddr *)&sa, &sl)) continue;
         if (sa.ss_family == AF_INET) port = ntohs(((struct sockaddr_in *)&sa)->sin_port);
         else if (sa.ss_family == AF_INET6) port = ntohs(((struct sockaddr_in6 *)&sa)->sin6_port);
         else continue;
+        if (!known) {                                              /* (no SO_ACCEPTCONN: not connected, not an ephemeral port) */
+            if (!getpeername(fd, (struct sockaddr *)&peer, &pl) || errno != ENOTCONN || port >= 49152) continue;
+        }
         for (i = 0; i < n && ports[i] != port; i++) {}
         if (!port || i < n) continue;                              /* (IPv4 and IPv6 on one port: once) */
         ports[n] = port;

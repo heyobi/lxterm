@@ -381,6 +381,326 @@
           }
         }
       }
+    },
+    "The download failed (HTTP %lld, %@).": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İndirme başarısız oldu (HTTP %lld, %@)."
+          }
+        }
+      }
+    },
+    "The image has no arm64 version.": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu görüntünün arm64 sürümü yok."
+          }
+        }
+      }
+    },
+    "The checksum of %@ does not match: the download was not used.": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ sağlama toplamı tutmuyor: indirilen dosya kullanılmadı."
+          }
+        }
+      }
+    },
+    "Unsupported image format: %@": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Desteklenmeyen görüntü biçimi: %@"
+          }
+        }
+      }
+    },
+    "Could not unpack: %@": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Açılamadı: %@"
+          }
+        }
+      }
+    },
+    "Each is the project's own official arm64 image, unmodified, downloaded from Docker Hub and checked against its SHA-256 digest. Once downloaded, choose it from + when opening a tab. Unofficial: not affiliated with or endorsed by these projects.": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Her biri projenin kendi resmi arm64 görüntüsüdür; değiştirilmeden Docker Hub'dan indirilir ve SHA-256 özetiyle doğrulanır. İndirdikten sonra yeni sekme açarken + menüsünden seçin. Resmi değildir: bu projelerle bağlantılı değildir, onlarca desteklenmez."
+          }
+        }
+      }
+    },
+    "Distributions": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dağıtımlar"
+          }
+        }
+      }
+    },
+    "Download failed": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İndirme başarısız"
+          }
+        }
+      }
+    },
+    "OK": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tamam"
+          }
+        }
+      }
+    },
+    "Remove %@?": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ kaldırılsın mı?"
+          }
+        }
+      }
+    },
+    "Remove": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kaldır"
+          }
+        }
+      }
+    },
+    "Everything installed or changed in it is deleted, and its tabs are closed.": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İçinde kurulan ya da değiştirilen her şey silinir, sekmeleri kapanır."
+          }
+        }
+      }
+    },
+    "%@ · included": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ · uygulamayla gelir"
+          }
+        }
+      }
+    },
+    "%@ · about %lld MB download": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ · yaklaşık %lld MB indirme"
+          }
+        }
+      }
+    },
+    "Open": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aç"
+          }
+        }
+      }
+    },
+    "Download": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İndir"
+          }
+        }
+      }
+    },
+    "Ubuntu and Alpine Linux can be downloaded for new tabs, beside Debian.": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Debian'ın yanında yeni sekmeler için Ubuntu ve Alpine Linux da indirilebilir."
+          }
+        }
+      }
+    },
+    "Ports: servers running in the shells": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Portlar: kabuklarda çalışan sunucular"
+          }
+        }
+      }
+    },
+    "Get more…": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Başka dağıtım indir…"
+          }
+        }
+      }
+    },
+    "No servers are running.": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Çalışan sunucu yok."
+          }
+        }
+      }
+    },
+    "Start one in a shell and it appears here, for example:": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bir kabukta sunucu başlatın, burada görünür. Örneğin:"
+          }
+        }
+      }
+    },
+    "Servers listening in your shells. They keep running while LxTerm is open.": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kabuklarınızda dinleyen sunucular. LxTerm açık kaldıkça çalışmaya devam ederler."
+          }
+        }
+      }
+    },
+    "Other port": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Başka port"
+          }
+        }
+      }
+    },
+    "Port": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Port"
+          }
+        }
+      }
+    },
+    "Ports": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Portlar"
+          }
+        }
+      }
+    },
+    "Port %@ is open": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Port %@ açıldı"
+          }
+        }
+      }
+    },
+    "Dismiss": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kapat"
+          }
+        }
+      }
+    },
+    "Nothing answers here": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Burada yanıt veren yok"
+          }
+        }
+      }
+    },
+    "Try again": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tekrar dene"
+          }
+        }
+      }
+    },
+    "No server is listening on this port. Start one in a shell, then try again.": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bu portta dinleyen sunucu yok. Bir kabukta başlatıp tekrar deneyin."
+          }
+        }
+      }
+    },
+    "Back": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Geri"
+          }
+        }
+      }
+    },
+    "Forward": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İleri"
+          }
+        }
+      }
     }
   }
 }

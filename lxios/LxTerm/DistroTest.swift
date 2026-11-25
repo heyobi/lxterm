@@ -29,7 +29,7 @@ enum DistroTest {
             if let deb = store.current {
                 keep(deb, "debian")
                 try? await Task.sleep(for: .seconds(15))
-                type(deb, "cd /tmp && python3 -m http.server 8123 > /tmp/srv.log 2>&1 &\r")
+                type(deb, "cd /tmp && python3 -m http.server 8123 > /tmp/srv.log 2>&1 & sleep 6; curl -sI http://127.0.0.1:8123/ | head -n 1; cat /tmp/srv.log\r")
             }
             for d in Distro.all where !d.builtIn {
                 let t0 = Date()
@@ -53,6 +53,9 @@ enum DistroTest {
             }
             try? await Task.sleep(for: .seconds(10))
             Ports.shared.scan()
+            var ports = [Int32](repeating: 0, count: 64)
+            var names = [CChar](repeating: 0, count: 64 * 40)
+            log("raw listening: \(lx_engine_listening(&ports, &names, 64)) \(ports.prefix(4))")
             log("ports: " + Ports.shared.list.map { "\($0.port)=\($0.program.isEmpty ? "?" : $0.program)" }.joined(separator: " "))
             log("announced: \(Ports.shared.announced.map { String($0.port) } ?? "none")")
             log("done")

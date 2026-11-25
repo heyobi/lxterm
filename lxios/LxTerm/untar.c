@@ -132,7 +132,7 @@ const char *aoi_untar_gz_progress(const char *archive, const char *dest, unsigne
                         ssize_t k;
                         while (a >= 0 && b >= 0 && (k = read(a, buf, sizeof buf)) > 0) if (write(b, buf, (size_t)k) != k) break;
                         if (a >= 0) close(a);
-                        if (b >= 0) { fchmod(b, mode ? mode : 0644); close(b); }
+                        if (b >= 0) { fchmod(b, (mode ? mode : 0644) | 0600); close(b); }
                     }
                 }
             } else if (type == '0' || type == 0 || type == '7') {
@@ -145,7 +145,7 @@ const char *aoi_untar_gz_progress(const char *archive, const char *dest, unsigne
                     if (fd >= 0 && write(fd, buf, k) != (ssize_t)k) { close(fd); gzclose(g); return "out of space"; }
                     left -= k;
                 }
-                if (fd >= 0) { fchmod(fd, mode); close(fd); }
+                if (fd >= 0) { fchmod(fd, mode | 0600); close(fd); }   /* (root writes any file: so does the app) */
                 count++;
             }
         }
