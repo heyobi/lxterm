@@ -31,7 +31,7 @@ enum DistroTest {
                 try? await Task.sleep(for: .seconds(15))
                 type(deb, "cd /tmp && python3 -m http.server 8123 > /tmp/srv.log 2>&1 & sleep 6; curl -sI http://127.0.0.1:8123/ | head -n 1; cat /tmp/srv.log\r")
             }
-            for d in Distro.all where ["ubuntu", "alpine", "fedora"].contains(d.id) {
+            for d in Distro.all where ["ubuntu", "alpine", "fedora", "arch"].contains(d.id) {
                 let t0 = Date()
                 do {
                     try await d.install { _ in }
@@ -46,6 +46,10 @@ enum DistroTest {
                     type(s, "head -n 2 /etc/os-release; echo shell=$0; apk add --no-progress python3 2>&1 | tail -n 2; python3 -c 'print(6*7)'\r")
                     try? await Task.sleep(for: .seconds(90))
                     type(s, "python3 -m http.server 8124 > /tmp/srv.log 2>&1 &\r")
+                } else if d.id == "arch" {
+                    try? await Task.sleep(for: .seconds(240))           // (its setup runs in the tab first)
+                    type(s, "head -n 2 /etc/os-release; pacman -Q | wc -l; pacman -Qk pacman | tail -n 1\r")
+                    try? await Task.sleep(for: .seconds(20))
                 } else if d.id == "fedora" {
                     type(s, "head -n 2 /etc/os-release; echo shell=$0; rpm -q bash; dnf --version | head -n 1\r")
                     try? await Task.sleep(for: .seconds(30))

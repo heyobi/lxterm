@@ -432,16 +432,6 @@
         }
       }
     },
-    "Each is the project's own official arm64 image, unmodified, downloaded from Docker Hub and checked against its SHA-256 digest. Once downloaded, choose it from + when opening a tab. Unofficial: not affiliated with or endorsed by these projects.": {
-      "localizations": {
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Her biri projenin kendi resmi arm64 görüntüsüdür; değiştirilmeden Docker Hub'dan indirilir ve SHA-256 özetiyle doğrulanır. İndirdikten sonra yeni sekme açarken + menüsünden seçin. Resmi değildir: bu projelerle bağlantılı değildir, onlarca desteklenmez."
-          }
-        }
-      }
-    },
     "Distributions": {
       "localizations": {
         "tr": {
@@ -688,16 +678,6 @@
           "stringUnit": {
             "state": "translated",
             "value": "İleri"
-          }
-        }
-      }
-    },
-    "Ubuntu, Alpine Linux, Fedora, AlmaLinux, Rocky Linux and openSUSE can be downloaded for new tabs, beside Debian.": {
-      "localizations": {
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Debian'ın yanında yeni sekmeler için Ubuntu, Alpine Linux, Fedora, AlmaLinux, Rocky Linux ve openSUSE de indirilebilir."
           }
         }
       }
@@ -1398,6 +1378,26 @@
           "stringUnit": {
             "state": "translated",
             "value": "LxTerm'i beğendin mi? Diğer uygulamalarıma göz at"
+          }
+        }
+      }
+    },
+    "Ubuntu, Alpine Linux, Fedora, AlmaLinux, Rocky Linux, openSUSE and Arch Linux ARM can be downloaded for new tabs, beside Debian.": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Debian'ın yanında yeni sekmeler için Ubuntu, Alpine Linux, Fedora, AlmaLinux, Rocky Linux, openSUSE ve Arch Linux ARM de indirilebilir."
+          }
+        }
+      }
+    },
+    "Each is the project's own official arm64 image, unmodified, downloaded from Docker Hub and checked against its SHA-256 digest; Arch Linux ARM is installed from its own repositories, package by package, as pacstrap does. Once downloaded, choose it from + when opening a tab. Unofficial: not affiliated with or endorsed by these projects.": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Her biri projenin kendi resmi arm64 görüntüsüdür; değiştirilmeden Docker Hub'dan indirilir ve SHA-256 özetiyle doğrulanır. Arch Linux ARM ise pacstrap'in yaptığı gibi kendi depolarından paket paket kurulur. İndirdikten sonra yeni sekme açarken + menüsünden seçin. Resmi değildir: bu projelerle bağlantılı değildir, onlarca desteklenmez."
           }
         }
       }

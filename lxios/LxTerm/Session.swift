@@ -114,6 +114,10 @@ final class Session: NSObject, ObservableObject, Identifiable, TerminalViewDeleg
 
     /// Starts the shell (resumed from its snapshot when there is one).
     func start() {
+        if !distro.builtIn, typeAfterStart == nil,                 // (Arch Linux ARM: the rest of its setup, in view)
+           FileManager.default.fileExists(atPath: distro.root.appendingPathComponent(".lxterm-firstrun").path) {
+            typeAfterStart = "sh /tmp/lxterm-setup.sh\r"
+        }
         defer {
             if let t = typeAfterStart, handle != nil || webRunning {
                 typeAfterStart = nil

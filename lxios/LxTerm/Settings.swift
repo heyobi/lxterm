@@ -109,7 +109,7 @@ struct SettingsView: View {
                         LabeledContent("Distributions", value: DistroManager.shared.installed.map(\.name).joined(separator: ", "))
                     }
                 } footer: {
-                    Text("Ubuntu, Alpine Linux, Fedora, AlmaLinux, Rocky Linux and openSUSE can be downloaded for new tabs, beside Debian.")
+                    Text("Ubuntu, Alpine Linux, Fedora, AlmaLinux, Rocky Linux, openSUSE and Arch Linux ARM can be downloaded for new tabs, beside Debian.")
                 }
                 Section {
                     Toggle("Accelerated engine (beta)", isOn: $webEngine)

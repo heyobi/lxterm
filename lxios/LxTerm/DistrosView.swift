@@ -13,7 +13,7 @@ struct DistrosView: View {
             Section {
                 ForEach(Distro.all) { d in row(d) }
             } footer: {
-                Text("Each is the project's own official arm64 image, unmodified, downloaded from Docker Hub and checked against its SHA-256 digest. Once downloaded, choose it from + when opening a tab. Unofficial: not affiliated with or endorsed by these projects.")
+                Text("Each is the project's own official arm64 image, unmodified, downloaded from Docker Hub and checked against its SHA-256 digest; Arch Linux ARM is installed from its own repositories, package by package, as pacstrap does. Once downloaded, choose it from + when opening a tab. Unofficial: not affiliated with or endorsed by these projects.")
             }
         }
         .navigationTitle("Distributions")

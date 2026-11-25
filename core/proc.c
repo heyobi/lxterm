@@ -3256,7 +3256,7 @@ static void rmtree(const char *dir)
 }
 
 static const char *const lx_pid_files[] = { "stat", "status", "cmdline", "comm", "environ", "statm", "maps",
-                                            "io", "limits", "oom_score_adj", "cgroup", "mountinfo", NULL };
+                                            "io", "limits", "oom_score_adj", "cgroup", "mountinfo", "mounts", NULL };
 
 static void lx_piddir(const char *base, const char *name)
 {
@@ -3417,6 +3417,9 @@ static int lx_proc_file(struct aoi_proc *p, const char *g, FILE *t)
         else if (!strcmp(f, "comm")) fprintf(t, "%s\n", o.comm);
         else if (!strcmp(f, "statm")) fprintf(t, "%llu %llu 0 0 0 0 0\n", (unsigned long long)(o.vsize / 4096), (unsigned long long)(o.rss / 4096));
         else if (!strcmp(f, "environ") || !strcmp(f, "mountinfo")) {}
+        else if (!strcmp(f, "mounts"))                             /* (/etc/mtab: pacman's disk space check) */
+            fprintf(t, "rootfs / ext4 rw,relatime 0 0\nproc /proc proc rw,nosuid,nodev,noexec 0 0\n"
+                       "devpts /dev/pts devpts rw,nosuid,noexec 0 0\ntmpfs /dev/shm tmpfs rw,nosuid,nodev 0 0\n");
         else if (!strcmp(f, "io")) fprintf(t, "rchar: 0\nwchar: 0\nsyscr: 0\nsyscw: 0\nread_bytes: 0\nwrite_bytes: 0\n");
         else if (!strcmp(f, "oom_score_adj")) fprintf(t, "0\n");
         else if (!strcmp(f, "cgroup")) fprintf(t, "0::/\n");
@@ -4784,6 +4787,18 @@ uint64_t aoi_proc_syscall(struct aoi_cpu *c)
         break;
     }
     case NR_ioctl:
+        if (p->linux_mode && (f = fd_get(p, a0)) && f->kind != AOI_FD_TTY && f->kind != AOI_FD_PTM && f->kind != AOI_FD_INET) {
+            /* any other fd (pipes, socketpairs, AF_UNIX, files): FIONBIO as fcntl's O_NONBLOCK
+             * (Python's asyncio sets its self-pipe socketpair so: Jupyter), FIONREAD from the
+             * host, FIOCLEX/FIONCLEX */
+            int v = 0;
+            if (a1 == 0x5421) { r = get(p, a2, &v, 4) ? (f->nonblock = v != 0, 0) : err(L_EFAULT); break; }
+            if (a1 == 0x5451 || a1 == 0x5450) { f->cloexec = a1 == 0x5451; r = 0; break; }
+            if (a1 == 0x541b && (f->kind == AOI_FD_PIPE || f->kind == AOI_FD_SOCKET)) {
+                r = ioctl(f->host, FIONREAD, &v) ? herr() : put(p, a2, &v, 4) ? 0 : err(L_EFAULT);
+                break;
+            }
+        }
         if ((f = fd_get(p, a0)) && f->kind == AOI_FD_INET && (a1 == 0x541b || a1 == 0x5421)) {   /* FIONREAD, FIONBIO */
             int v = 0;
             if (a1 == 0x5421) { r = get(p, a2, &v, 4) ? (f->nonblock = v != 0, 0) : err(L_EFAULT); break; }

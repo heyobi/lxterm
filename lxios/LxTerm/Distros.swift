@@ -22,6 +22,7 @@ struct Distro: Identifiable, Hashable {
         Distro(id: "almalinux", name: "AlmaLinux", detail: "10 · dnf", repo: "library/almalinux", tag: "10", megabytes: 64),
         Distro(id: "rocky", name: "Rocky Linux", detail: "10 · dnf", repo: "rockylinux/rockylinux", tag: "10", megabytes: 66),
         Distro(id: "opensuse", name: "openSUSE Tumbleweed", detail: "zypper", repo: "opensuse/tumbleweed", tag: "latest", megabytes: 38),
+        Distro(id: "arch", name: "Arch Linux ARM", detail: "pacman", repo: "archlinuxarm", tag: "", megabytes: 110),
     ]
 
     static func named(_ id: String?) -> Distro { all.first { $0.id == id } ?? debian }
@@ -74,6 +75,17 @@ struct Distro: Identifiable, Hashable {
         try? fm.removeItem(at: tmpRoot)
         try fm.createDirectory(at: tmpRoot, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: tmpRoot) }
+        if repo == "archlinuxarm" {                                 // its own repositories (Pacstrap.swift)
+            try await Pacstrap.install(into: tmpRoot, progress: progress)
+            progress(0.95)
+            try? fm.removeItem(at: root)
+            try fm.moveItem(at: tmpRoot, to: root)
+            lx_engine_prepare_root(root.path)
+            try Data("archlinuxarm (packages from its repositories)\n".utf8).write(to: root.appendingPathComponent(".lxterm-image"))
+            fm.createFile(atPath: okFile.path, contents: nil)
+            progress(1)
+            return
+        }
         let reg = Registry(repo: repo)
         try await reg.login()
         let manifest = try await reg.arm64Manifest(tag: tag)
