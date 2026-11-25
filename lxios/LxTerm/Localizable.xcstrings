@@ -1411,6 +1411,16 @@
           }
         }
       }
+    },
+    "Distribution colours": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dağıtım renkleri"
+          }
+        }
+      }
     }
   }
 }

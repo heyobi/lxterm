@@ -58,6 +58,30 @@ struct Theme: Identifiable, Equatable {
 
     var isDark: Bool { id != "paper" }
 
+    /// Each distribution's own colours in its tabs (Settings › Distribution colours): the
+    /// terminal's, set by the app; nothing in the distribution is changed.
+    static var distroColours: Bool { UserDefaults.standard.object(forKey: "distroColours") as? Bool ?? true }
+
+    private static func rgb(_ hex: UInt32) -> UIColor {
+        UIColor(red: CGFloat((hex >> 16) & 255) / 255, green: CGFloat((hex >> 8) & 255) / 255, blue: CGFloat(hex & 255) / 255, alpha: 1)
+    }
+
+    static let distros: [String: Theme] = [
+        "ubuntu": Theme(id: "ubuntu", name: "Ubuntu", background: rgb(0x300A24), foreground: rgb(0xFFFFFF), cursor: rgb(0xE95420)),
+        "fedora": Theme(id: "fedora", name: "Fedora", background: rgb(0x0B1C2E), foreground: rgb(0xE8EEF4), cursor: rgb(0x51A2DA)),
+        "arch": Theme(id: "arch", name: "Arch", background: rgb(0x0E1419), foreground: rgb(0xD8DEE9), cursor: rgb(0x1793D1)),
+        "alpine": Theme(id: "alpine", name: "Alpine", background: rgb(0x0C1A2B), foreground: rgb(0xE2E8F0), cursor: rgb(0x3A8FC1)),
+        "opensuse": Theme(id: "opensuse", name: "openSUSE", background: rgb(0x10201A), foreground: rgb(0xE6F0E6), cursor: rgb(0x73BA25)),
+        "almalinux": Theme(id: "almalinux", name: "AlmaLinux", background: rgb(0x14171F), foreground: rgb(0xEDEFF3), cursor: rgb(0xFFCB12)),
+        "rocky": Theme(id: "rocky", name: "Rocky", background: rgb(0x0E1D17), foreground: rgb(0xE5F2EC), cursor: rgb(0x10B981)),
+    ]
+
+    /// The theme of a tab: its distribution's when that is on, else the chosen one.
+    static func of(_ d: Distro) -> Theme {
+        if distroColours, !d.builtIn, let t = distros[d.id] { return t }
+        return current
+    }
+
     func apply(to tv: TerminalView) {
         tv.nativeBackgroundColor = background
         tv.nativeForegroundColor = foreground
@@ -75,6 +99,7 @@ struct SettingsView: View {
     @AppStorage("font") private var font = "system"
     @AppStorage("cursor") private var cursor = "block"
     @AppStorage("cursorBlink") private var cursorBlink = true
+    @AppStorage("distroColours") private var distroColours = true
     @State private var size = Settings.fontSize
     @State private var confirmReset = false
 
@@ -103,6 +128,7 @@ struct SettingsView: View {
                     }
                     .pickerStyle(.inline)
                     .labelsHidden()
+                    Toggle("Distribution colours", isOn: $distroColours)
                 }
                 Section {
                     NavigationLink { DistrosView() } label: {
@@ -144,6 +170,7 @@ struct SettingsView: View {
             .onChange(of: font) { _, _ in NotificationCenter.default.post(name: .lxFontChanged, object: nil) }
             .onChange(of: cursor) { _, _ in NotificationCenter.default.post(name: .lxFontChanged, object: nil) }
             .onChange(of: cursorBlink) { _, _ in NotificationCenter.default.post(name: .lxFontChanged, object: nil) }
+            .onChange(of: distroColours) { _, _ in NotificationCenter.default.post(name: .lxFontChanged, object: nil) }
             .confirmationDialog("Reset Debian?", isPresented: $confirmReset, titleVisibility: .visible) {
                 Button("Erase and unpack again", role: .destructive) { dismiss(); store.reset() }
             } message: {
@@ -183,6 +210,54 @@ struct PackageSourcesView: View {
     }
 }
 
+/// A small Markdown reader for the notices: headings, paragraphs (hard-wrapped lines
+/// joined), tables as one block per row, inline `code`, **bold** and links.
+struct MarkdownText: View {
+    let blocks: [(kind: Int, text: String)]                    // 1-3 heading, 0 paragraph, 9 table row
+
+    init(_ md: String) {
+        var out: [(Int, String)] = [], para: [String] = []
+        func flush() { if !para.isEmpty { out.append((0, para.joined(separator: " "))); para = [] } }
+        var header: [String] = []
+        for raw in md.components(separatedBy: "\n") {
+            let line = raw.trimmingCharacters(in: .whitespaces)
+            if line.isEmpty { flush(); header = []; continue }
+            if line.hasPrefix("#") {
+                flush()
+                let level = line.prefix { $0 == "#" }.count
+                out.append((min(level, 3), line.drop { $0 == "#" }.trimmingCharacters(in: .whitespaces)))
+            } else if line.hasPrefix("|") {
+                flush()
+                let cells = line.trimmingCharacters(in: CharacterSet(charactersIn: "|")).components(separatedBy: "|").map { $0.trimmingCharacters(in: .whitespaces) }
+                if cells.allSatisfy({ $0.allSatisfy { "-: ".contains($0) } }) { continue }
+                if header.isEmpty { header = cells; continue }
+                let row = zip(header, cells).map { "**\($0)**: \($1)" }.joined(separator: "\n")
+                out.append((9, row))
+            } else { para.append(line) }
+        }
+        flush()
+        blocks = out
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            ForEach(Array(blocks.enumerated()), id: \.offset) { _, b in
+                let a = (try? AttributedString(markdown: b.text, options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))) ?? AttributedString(b.text)
+                switch b.kind {
+                case 1: Text(a).font(.title2.bold())
+                case 2: Text(a).font(.title3.bold()).padding(.top, 6)
+                case 3: Text(a).font(.headline)
+                case 9: Text(a).font(.footnote).padding(10).frame(maxWidth: .infinity, alignment: .leading)
+                            .background(RoundedRectangle(cornerRadius: 10).fill(Color.secondary.opacity(0.12)))
+                default: Text(a).font(.subheadline)
+                }
+            }
+        }
+        .textSelection(.enabled)
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+}
+
 struct LicensesView: View {
     var body: some View {
         List {
@@ -191,7 +266,13 @@ struct LicensesView: View {
                                              withExtension: (name as NSString).pathExtension.isEmpty ? nil : (name as NSString).pathExtension,
                                              subdirectory: "licenses"),
                    let text = try? String(contentsOf: url, encoding: .utf8) {
-                    NavigationLink(name) { ScrollView { Text(text).font(.system(.footnote, design: .monospaced)).padding() } }
+                    NavigationLink(name) {
+                        ScrollView {
+                            if name.hasSuffix(".md") { MarkdownText(text).padding() }
+                            else { Text(text).font(.system(.footnote, design: .monospaced)).padding() }
+                        }
+                        .navigationTitle(name).navigationBarTitleDisplayMode(.inline)
+                    }
                 }
             }
         }

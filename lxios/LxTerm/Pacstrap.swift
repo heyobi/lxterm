@@ -85,10 +85,25 @@ enum Pacstrap {
         var done: Int64 = 0
         let cache = root.appendingPathComponent("var/cache/pacman/pkg", isDirectory: true)
         try fm.createDirectory(at: cache, withIntermediateDirectories: true)
+        // downloads six at a time (the mirrors are slow per file), each checked; then unpacked in order
+        let downloaded = Counter()
+        try await withThrowingTaskGroup(of: Void.self) { g in
+            var next = 0
+            func add() {
+                guard next < order.count else { return }
+                let p = order[next]; next += 1
+                g.addTask {
+                    let pkg = cache.appendingPathComponent(p.file)
+                    try await fetch("\(p.repo)/\(p.file)", to: pkg)
+                    guard try Distro.sha256(pkg) == "sha256:" + p.sha256 else { throw Distro.Failure.digest(p.file) }
+                    progress(0.05 + 0.65 * Double(downloaded.add(p.size)) / Double(total))
+                }
+            }
+            for _ in 0..<6 { add() }
+            while try await g.next() != nil { add() }
+        }
         for p in order {
             let pkg = cache.appendingPathComponent(p.file)
-            try await fetch("\(p.repo)/\(p.file)", to: pkg)
-            guard try Distro.sha256(pkg) == "sha256:" + p.sha256 else { throw Distro.Failure.digest(p.file) }
             let tar = work.appendingPathComponent(p.name + ".tar")
             if p.file.hasSuffix(".xz") { try unxz(pkg, to: tar) }
             else if p.file.hasSuffix(".gz") { try? fm.removeItem(at: tar); try fm.copyItem(at: pkg, to: tar) }
@@ -97,7 +112,7 @@ enum Pacstrap {
             try? fm.removeItem(at: tar)
             for meta in [".PKGINFO", ".BUILDINFO", ".MTREE", ".INSTALL", ".CHANGELOG"] { try? fm.removeItem(at: root.appendingPathComponent(meta)) }
             done += p.size
-            progress(0.05 + 0.85 * Double(done) / Double(total))
+            progress(0.7 + 0.2 * Double(done) / Double(total))
         }
         let names = order.map(\.name).joined(separator: " ")
         let script = """
@@ -119,6 +134,12 @@ enum Pacstrap {
         try fm.createDirectory(at: root.appendingPathComponent("tmp"), withIntermediateDirectories: true)
         try Data(script.utf8).write(to: root.appendingPathComponent("tmp/lxterm-setup.sh"))
         fm.createFile(atPath: root.appendingPathComponent(".lxterm-firstrun").path, contents: nil)
+    }
+
+    final class Counter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var n: Int64 = 0
+        func add(_ d: Int64) -> Int64 { lock.lock(); defer { lock.unlock() }; n += d; return n }
     }
 
     /// .xz (LZMA2 in the xz container) to a plain file, with Apple's Compression.

@@ -44,7 +44,7 @@ final class Session: NSObject, ObservableObject, Identifiable, TerminalViewDeleg
     private func makeView() -> TerminalView {
         let tv = TerminalView(frame: CGRect(x: 0, y: 0, width: 390, height: 600))
         tv.terminalDelegate = self
-        Theme.current.apply(to: tv)
+        Theme.of(distro).apply(to: tv)
         tv.font = Settings.font
         tv.getTerminal().setCursorStyle(Settings.cursor)
         let pinch = UIPinchGestureRecognizer(target: self, action: #selector(pinched(_:)))
@@ -274,14 +274,25 @@ final class Session: NSObject, ObservableObject, Identifiable, TerminalViewDeleg
     }
 
     func applySettings() {
-        Theme.current.apply(to: view)
+        Theme.of(distro).apply(to: view)
         view.font = Settings.font
         view.getTerminal().setCursorStyle(Settings.cursor)
     }
 
     // MARK: TerminalViewDelegate
 
-    func send(source: TerminalView, data: ArraySlice<UInt8>) {
+    /// “ ” ‘ ’ — – from the iPhone keyboard's smart punctuation: what a shell expects.
+    static func plainPunctuation(_ data: ArraySlice<UInt8>) -> ArraySlice<UInt8> {
+        guard data.contains(where: { $0 >= 0xE2 }), let s = String(bytes: data, encoding: .utf8) else { return data }
+        let t = s.replacingOccurrences(of: "\u{201C}", with: "\"").replacingOccurrences(of: "\u{201D}", with: "\"")
+                 .replacingOccurrences(of: "\u{201E}", with: "\"")
+                 .replacingOccurrences(of: "\u{2018}", with: "'").replacingOccurrences(of: "\u{2019}", with: "'")
+                 .replacingOccurrences(of: "\u{2014}", with: "--").replacingOccurrences(of: "\u{2013}", with: "-")
+        return ArraySlice(Array(t.utf8))
+    }
+
+    func send(source: TerminalView, data inData: ArraySlice<UInt8>) {
+        let data = UserDefaults.standard.object(forKey: "plainQuotes") as? Bool ?? true ? Session.plainPunctuation(inData) : inData
         if exited { restart(); return }
         if ctrlArmed, data.count == 1 { sendKeys([data[data.startIndex]]); return }
         if webRunning { WebEngine.shared.input(self, Array(data)); return }

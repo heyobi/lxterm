@@ -73,7 +73,7 @@ struct MainView: View {
     @State private var showSnippets = false
 
     var body: some View {
-        let theme = Theme.current
+        let theme = Theme.of(store.current?.distro ?? .debian)
         VStack(spacing: 0) {
             TabStrip(showSettings: $showSettings, showPorts: $showPorts, showSearch: $showSearch, showSnippets: $showSnippets)
             GeometryReader { proxy in
@@ -273,6 +273,7 @@ struct NewTabButton: View {
                 DistrosView().toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { showDistros = false } } }
             }
             .environmentObject(store)
+            .font(nil)                                             // (not the tab bar's 17 pt medium)
         }
     }
 }
@@ -286,6 +287,7 @@ struct TabChip: View {
     var body: some View {
         HStack(spacing: 6) {
             Image(systemName: session.exited ? "stop.circle" : session.accelerated ? "bolt.fill" : session.distro.builtIn ? "terminal" : "shippingbox").font(.caption)
+                .foregroundStyle(Theme.distroColours && !session.distro.builtIn ? Color(Theme.of(session.distro).cursor) : Color.primary)
             Text(session.title).font(.subheadline.weight(selected ? .semibold : .regular)).lineLimit(1)
             if selected {
                 Button(action: close) { Image(systemName: "xmark").font(.caption2.bold()) }
