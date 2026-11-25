@@ -61,6 +61,6 @@ both modes; `core/UPSTREAM` names the commit copied here.
 
 ## License
 
-GPL-3.0-or-later (`LICENSE`) with an additional permission for app stores (`NOTICE.md`); contributions are accepted on the terms in `CONTRIBUTING.md`. Third-party notices in `NOTICE.md`. Alpine Linux and
+GPL-3.0-or-later (`LICENSE`); contributions are accepted on the terms in `CONTRIBUTING.md` (which also let the official builds ship in the App Store). Third-party notices in `NOTICE.md`. Alpine Linux and
 Debian are trademarks of their projects; LxTerm is not affiliated with or endorsed by
 either.
