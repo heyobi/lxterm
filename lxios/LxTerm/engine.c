@@ -220,12 +220,14 @@ lx_session *lx_session_run(const char *root, const char *command,
     pthread_t th;
     pthread_attr_t at;
     const char *argv[] = { "/bin/bash", "-lc", command, NULL };
-    const char *env[sizeof shell_env / sizeof *shell_env];
+    const char *env[sizeof shell_env / sizeof *shell_env + 1];
     char bash[1100];
     struct stat bs;
     size_t k;
     if (!root || !*root) root = g_root;
     for (k = 0; k < sizeof shell_env / sizeof *shell_env; k++) env[k] = shell_env[k];
+    env[k - 1] = "LXTERM_QUIET=1";                                 /* (no welcome text in a command's output) */
+    env[k] = NULL;
     snprintf(bash, sizeof bash, "%s/bin/bash", root);
     if (lstat(bash, &bs)) {
         argv[0] = "/bin/sh";

@@ -76,10 +76,11 @@ enum Snippets {
         get {
             guard let d = UserDefaults.standard.data(forKey: key), let s = try? JSONDecoder().decode([Snippet].self, from: d) else {
                 // the first list, stored at once: Shortcuts keep a command by its id
-                let first = [Snippet(title: String(localized: "Weather"), command: "curl -s 'wttr.in/Istanbul?format=3'")] + Examples.snippets + [
-                        Snippet(title: String(localized: "Update packages"), command: "apt update && apt upgrade -y"),
-                        Snippet(title: String(localized: "System info"), command: "fastfetch"),
-                        Snippet(title: String(localized: "Web server in /root/Files"), command: "cd /root/Files && python3 -m http.server 8000")]
+                // fixed ids: a shortcut shared on the web finds the same example on every iPhone
+                let first = [Snippet(id: UUID(uuidString: "6C5A1E00-0000-4000-8000-000000000001")!, title: String(localized: "Weather"), command: "curl -s 'wttr.in/Istanbul?format=3'")] + Examples.snippets + [
+                        Snippet(id: UUID(uuidString: "6C5A1E00-0000-4000-8000-000000000005")!, title: String(localized: "Update packages"), command: "apt update && apt upgrade -y"),
+                        Snippet(id: UUID(uuidString: "6C5A1E00-0000-4000-8000-000000000006")!, title: String(localized: "System info"), command: "fastfetch"),
+                        Snippet(id: UUID(uuidString: "6C5A1E00-0000-4000-8000-000000000007")!, title: String(localized: "Web server in /root/Files"), command: "cd /root/Files && python3 -m http.server 8000")]
                 UserDefaults.standard.set(try? JSONEncoder().encode(first), forKey: key)
                 return first
             }

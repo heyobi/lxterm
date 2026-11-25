@@ -1661,6 +1661,16 @@
           }
         }
       }
+    },
+    "Empty: the default distribution in LxTerm’s Settings.": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Boş: LxTerm Ayarları'ndaki varsayılan dağıtım."
+          }
+        }
+      }
     }
   }
 }

@@ -76,9 +76,9 @@ enum Examples {
 
     /// The saved commands that go with them (Tools.swift's defaults).
     static var snippets: [Snippet] { [
-        Snippet(title: String(localized: "Exchange rates"), command: "python3 /root/Files/Examples/rates.py"),
-        Snippet(title: String(localized: "Save a note"), command: "python3 /root/Files/Examples/note.py"),
-        Snippet(title: String(localized: "Text statistics"), command: "python3 /root/Files/Examples/textstats.py"),
+        Snippet(id: UUID(uuidString: "6C5A1E00-0000-4000-8000-000000000002")!, title: String(localized: "Exchange rates"), command: "python3 /root/Files/Examples/rates.py"),
+        Snippet(id: UUID(uuidString: "6C5A1E00-0000-4000-8000-000000000003")!, title: String(localized: "Save a note"), command: "python3 /root/Files/Examples/note.py"),
+        Snippet(id: UUID(uuidString: "6C5A1E00-0000-4000-8000-000000000004")!, title: String(localized: "Text statistics"), command: "python3 /root/Files/Examples/textstats.py"),
     ] }
 
     static func install(in shared: URL) {

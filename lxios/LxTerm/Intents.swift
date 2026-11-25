@@ -32,7 +32,7 @@ struct RunInTerminalIntent: AppIntent {
     static var openAppWhenRun = true
 
     @Parameter(title: "Command") var command: String
-    @Parameter(title: "Distribution", default: .debian) var distribution: DistroOption
+    @Parameter(title: "Distribution", description: "Empty: the default distribution in LxTerm’s Settings.") var distribution: DistroOption?
 
     static var parameterSummary: some ParameterSummary {
         Summary("Run \(\.$command) in \(\.$distribution)")
@@ -40,7 +40,7 @@ struct RunInTerminalIntent: AppIntent {
 
     @MainActor
     func perform() async throws -> some IntentResult {
-        let d = distribution.distro
+        let d = distribution?.distro ?? Distro.preferred ?? .debian
         guard d.installed else { throw IntentFailure.notDownloaded(d.name) }
         for _ in 0..<50 where Store.shared?.phase != .ready { try await Task.sleep(for: .milliseconds(200)) }   // (just launched)
         guard let store = Store.shared, store.phase == .ready else { throw IntentFailure.notReady }
@@ -55,7 +55,7 @@ struct RunCommandIntent: AppIntent {
     static var description = IntentDescription("Runs the command in the chosen distribution and returns what it printed, for the next actions of a shortcut. It stops after the time limit.")
 
     @Parameter(title: "Command") var command: String
-    @Parameter(title: "Distribution", default: .debian) var distribution: DistroOption
+    @Parameter(title: "Distribution", description: "Empty: the default distribution in LxTerm’s Settings.") var distribution: DistroOption?
     @Parameter(title: "Time limit (seconds)", default: 25, inclusiveRange: (1, 25)) var seconds: Int
     @Parameter(title: "Input", description: "Text given to the command on its standard input.") var input: String?
 
@@ -64,7 +64,7 @@ struct RunCommandIntent: AppIntent {
     }
 
     func perform() async throws -> some IntentResult & ReturnsValue<String> {
-        let d = distribution.distro
+        let d = distribution?.distro ?? Distro.preferred ?? .debian
         guard await MainActor.run(body: { Store.prepareEngine() }) else { throw IntentFailure.notReady }
         guard d.installed else { throw IntentFailure.notDownloaded(d.name) }
         let out = try await Headless.run(command, root: d.builtIn ? nil : d.root.path, seconds: seconds, input: input)
@@ -167,13 +167,13 @@ struct RunSnippetIntent: AppIntent {
     static var description = IntentDescription("Runs one of LxTerm's saved commands and returns what it printed.")
 
     @Parameter(title: "Saved Command") var snippet: SnippetEntity
-    @Parameter(title: "Distribution", default: .debian) var distribution: DistroOption
+    @Parameter(title: "Distribution", description: "Empty: the default distribution in LxTerm’s Settings.") var distribution: DistroOption?
     @Parameter(title: "Input", description: "Text given to the command on its standard input.") var input: String?
 
     static var parameterSummary: some ParameterSummary { Summary("Run \(\.$snippet) in \(\.$distribution)") { \.$input } }
 
     func perform() async throws -> some IntentResult & ReturnsValue<String> & ProvidesDialog {
-        let d = distribution.distro
+        let d = distribution?.distro ?? Distro.preferred ?? .debian
         guard await MainActor.run(body: { Store.prepareEngine() }) else { throw IntentFailure.notReady }
         guard d.installed else { throw IntentFailure.notDownloaded(d.name) }
         let out = try await Headless.run(snippet.command, root: d.builtIn ? nil : d.root.path, seconds: 25, input: input)
