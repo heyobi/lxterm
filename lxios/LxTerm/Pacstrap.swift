@@ -96,6 +96,7 @@ enum Pacstrap {
                     let pkg = cache.appendingPathComponent(p.file)
                     try await fetch("\(p.repo)/\(p.file)", to: pkg)
                     guard try Distro.sha256(pkg) == "sha256:" + p.sha256 else { throw Distro.Failure.digest(p.file) }
+                    try await fetch("\(p.repo)/\(p.file).sig", to: cache.appendingPathComponent(p.file + ".sig"))
                     progress(0.05 + 0.65 * Double(downloaded.add(p.size)) / Double(total))
                 }
             }
@@ -127,10 +128,11 @@ enum Pacstrap {
         printf 'Server = https://de3.mirror.archlinuxarm.org/$arch/$repo\\nServer = https://fl.us.mirror.archlinuxarm.org/$arch/$repo\\nServer = https://ca.us.mirror.archlinuxarm.org/$arch/$repo\\nServer = http://mirror.archlinuxarm.org/$arch/$repo\\n' > /etc/pacman.d/mirrorlist
         pacman-key --init && pacman-key --populate archlinuxarm
         pacman -Sy --noconfirm
-        # pacman records the packages installed from its cache, checking their signatures
-        pacman -S --noconfirm --needed --dbonly \(names) || pacman -Sy --noconfirm --needed --dbonly \(names)
+        # pacman records the packages already unpacked, from the downloaded files, checking
+        # each one's signature (no network: the repositories may have moved on since)
+        pacman -U --noconfirm --dbonly /var/cache/pacman/pkg/*.pkg.tar.*[!g]
         # filesystem again, the usual way: its install script (/etc/os-release and the rest)
-        pacman -S --noconfirm filesystem
+        pacman -U --noconfirm --overwrite '*' /var/cache/pacman/pkg/filesystem-*.pkg.tar.*[!g]
         rm -f /.lxterm-firstrun /tmp/lxterm-setup.sh
         echo "Arch Linux ARM is ready. Install more with: pacman -S <package>"
 
