@@ -28,8 +28,12 @@ struct Theme: Identifiable, Equatable {
               foreground: UIColor(red: 1.0, green: 0.71, blue: 0.0, alpha: 1), cursor: UIColor(red: 1.0, green: 0.8, blue: 0.2, alpha: 1)),
     ]
 
+    /// "auto": Night or Paper, as the iPhone is dark or light.
+    static var automatic: Bool { UserDefaults.standard.string(forKey: "theme") == "auto" }
+
     static var current: Theme {
-        let id = UserDefaults.standard.string(forKey: "theme") ?? "night"
+        var id = UserDefaults.standard.string(forKey: "theme") ?? "night"
+        if id == "auto" { id = UITraitCollection.current.userInterfaceStyle == .light ? "paper" : "night" }
         return all.first { $0.id == id } ?? all[0]
     }
 
@@ -40,6 +44,7 @@ struct Theme: Identifiable, Equatable {
         tv.nativeForegroundColor = foreground
         tv.caretColor = cursor
         tv.backgroundColor = background
+        tv.keyboardAppearance = isDark ? .dark : .light
     }
 }
 
@@ -64,6 +69,7 @@ struct SettingsView: View {
                 }
                 Section("Colours") {
                     Picker("Theme", selection: $theme) {
+                        Text("Automatic (light or dark, as the iPhone)").tag("auto")
                         ForEach(Theme.all) { t in Text(t.name).tag(t.id) }
                     }
                     .pickerStyle(.inline)

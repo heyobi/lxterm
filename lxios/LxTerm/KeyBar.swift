@@ -55,6 +55,23 @@ final class KeyBar: UIInputView {
             stack.addArrangedSubview(b)
         }
 
+        let fn = UIButton(type: .system)                          // F1-F12, in a menu: the row stays as it is
+        var fc = UIButton.Configuration.gray()
+        fc.cornerStyle = .medium
+        fc.contentInsets = NSDirectionalEdgeInsets(top: 6, leading: 11, bottom: 6, trailing: 11)
+        fc.attributedTitle = AttributedString("Fn", attributes: AttributeContainer([.font: UIFont.systemFont(ofSize: 16, weight: .medium)]))
+        fn.configuration = fc
+        fn.accessibilityLabel = String(localized: "Function keys")
+        fn.showsMenuAsPrimaryAction = true
+        fn.menu = UIMenu(title: "", options: .displayInline, children: KeyBar.functionKeys.enumerated().map { i, seq in
+            UIAction(title: "F\(i + 1)") { [weak self] _ in self?.session?.sendKeys(Array(seq.utf8)) }
+        } + [UIAction(title: String(localized: "Home")) { [weak self] _ in self?.session?.sendKeys(Array("\u{1b}[H".utf8)) },
+             UIAction(title: String(localized: "End")) { [weak self] _ in self?.session?.sendKeys(Array("\u{1b}[F".utf8)) },
+             UIAction(title: String(localized: "Page Up")) { [weak self] _ in self?.session?.sendKeys(Array("\u{1b}[5~".utf8)) },
+             UIAction(title: String(localized: "Page Down")) { [weak self] _ in self?.session?.sendKeys(Array("\u{1b}[6~".utf8)) }])
+        fn.preferredMenuElementOrder = .fixed
+        stack.addArrangedSubview(fn)
+
         let hide = UIButton(type: .system)
         var hc = UIButton.Configuration.filled()
         hc.cornerStyle = .medium
@@ -83,6 +100,10 @@ final class KeyBar: UIInputView {
     }
 
     required init?(coder: NSCoder) { fatalError() }
+
+    /// What xterm sends for F1-F12.
+    static let functionKeys = ["\u{1b}OP", "\u{1b}OQ", "\u{1b}OR", "\u{1b}OS", "\u{1b}[15~", "\u{1b}[17~",
+                               "\u{1b}[18~", "\u{1b}[19~", "\u{1b}[20~", "\u{1b}[21~", "\u{1b}[23~", "\u{1b}[24~"]
 
     private func toggleCtrl() {
         guard let s = session else { return }

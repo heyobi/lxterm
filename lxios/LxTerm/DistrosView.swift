@@ -6,6 +6,7 @@ struct DistrosView: View {
     @ObservedObject private var m = DistroManager.shared
     @Environment(\.dismiss) private var dismiss
     @State private var confirmRemove: Distro?
+    @State private var confirmReset: Distro?
 
     var body: some View {
         List {
@@ -29,6 +30,15 @@ struct DistrosView: View {
                 }
             }
         } message: { Text("Everything installed or changed in it is deleted, and its tabs are closed.") }
+        .confirmationDialog(Text("Reset \(confirmReset?.name ?? "")?"), isPresented: Binding(get: { confirmReset != nil }, set: { if !$0 { confirmReset = nil } }), titleVisibility: .visible) {
+            Button("Erase and download again", role: .destructive) {
+                if let d = confirmReset {
+                    for s in store.sessions where s.distro == d { store.close(s) }
+                    m.remove(d)
+                    m.download(d)
+                }
+            }
+        } message: { Text("Everything installed or changed in it is deleted and a fresh copy is downloaded. Its tabs are closed.") }
     }
 
     @ViewBuilder private func row(_ d: Distro) -> some View {
@@ -53,10 +63,16 @@ struct DistrosView: View {
             }
         }
         .swipeActions {
-            if installed && !d.builtIn { Button("Remove", role: .destructive) { confirmRemove = d } }
+            if installed && !d.builtIn {
+                Button("Remove", role: .destructive) { confirmRemove = d }
+                Button("Reset") { confirmReset = d }.tint(.orange)
+            }
         }
         .contextMenu {
-            if installed && !d.builtIn { Button("Remove", systemImage: "trash", role: .destructive) { confirmRemove = d } }
+            if installed && !d.builtIn {
+                Button("Reset…", systemImage: "arrow.counterclockwise") { confirmReset = d }
+                Button("Remove", systemImage: "trash", role: .destructive) { confirmRemove = d }
+            }
         }
     }
 }

@@ -66,6 +66,7 @@ struct MainView: View {
     @State private var browser: BrowserPage?
     @State private var showPorts = false
     @ObservedObject private var ports = Ports.shared
+    @Environment(\.colorScheme) private var scheme
 
     var body: some View {
         let theme = Theme.current
@@ -89,7 +90,10 @@ struct MainView: View {
             }
         }
         .background(Color(theme.background).ignoresSafeArea())
-        .preferredColorScheme(theme.isDark ? .dark : .light)
+        .preferredColorScheme(Theme.automatic ? nil : theme.isDark ? .dark : .light)
+        .onChange(of: scheme) { _, _ in                            // Automatic: the iPhone turned light or dark
+            if Theme.automatic { NotificationCenter.default.post(name: .lxFontChanged, object: nil) }
+        }
         .overlay(alignment: .top) {
             if let p = ports.announced {
                 PortToast(port: p, open: { ports.announced = nil; browser = BrowserPage(url: Ports.url(p.port)) },

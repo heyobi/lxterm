@@ -184,6 +184,18 @@ lx_session *lx_session_start(const char *root, const char *snap, int cols, int r
     *resumed = 0;
     if (snap && *snap && aoi_snap_this_build(snap) && !aoi_snap_load(s->p, snap, root, NULL)) {
         aoi_proc_attach_tty_to(s->p, s->tty);                     /* its terminal is this session's now */
+        {   /* a shell is saved only while it waits at its prompt, in readline, which had the
+             * terminal in character mode; the new terminal starts in line mode, so keys showed
+             * as ^[[D until Enter made bash set it again */
+            uint8_t tio[44];
+            uint32_t lflag;
+            aoi_tty_get(s->tty, tio);
+            memcpy(&lflag, tio + 12, 4);
+            lflag &= ~(uint32_t)(0x2 | 0x8 | 0x40);                /* ICANON, ECHO, ECHONL */
+            memcpy(tio + 12, &lflag, 4);
+            tio[17 + 6] = 1; tio[17 + 5] = 0;                      /* VMIN 1, VTIME 0 */
+            aoi_tty_set(s->tty, tio, 36, 0);
+        }
         *resumed = 1;
     } else {
         memset(s->p, 0, sizeof *s->p);
