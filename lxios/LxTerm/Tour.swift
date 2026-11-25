@@ -94,7 +94,7 @@ enum Tour {
                 await waitPrompt(arch)
                 await type(arch, "pacman -S --noconfirm fastfetch > /dev/null 2>&1\r", max: 900)
                 await type(arch, cfg)
-                await type(arch, "printf '\\033[H\\033[2J\\033[3J'; fastfetch\r")
+                await type(arch, "printf '\\033[H\\033[2J'; fastfetch\r")
                 hideKeyboard(arch)
                 await shot("arch")
             }
