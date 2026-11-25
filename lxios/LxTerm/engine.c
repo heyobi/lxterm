@@ -213,6 +213,46 @@ lx_session *lx_session_start(const char *root, const char *snap, int cols, int r
     return s;
 }
 
+lx_session *lx_session_run(const char *root, const char *command,
+                           void (*out)(void *ctx, const char *s, size_t n), void (*exited)(void *ctx), void *ctx)
+{
+    lx_session *s = calloc(1, sizeof *s);
+    pthread_t th;
+    pthread_attr_t at;
+    const char *argv[] = { "/bin/bash", "-lc", command, NULL };
+    const char *env[sizeof shell_env / sizeof *shell_env];
+    char bash[1100];
+    struct stat bs;
+    size_t k;
+    if (!root || !*root) root = g_root;
+    for (k = 0; k < sizeof shell_env / sizeof *shell_env; k++) env[k] = shell_env[k];
+    snprintf(bash, sizeof bash, "%s/bin/bash", root);
+    if (lstat(bash, &bs)) {
+        argv[0] = "/bin/sh";
+        for (k = 0; env[k]; k++) if (!strncmp(env[k], "SHELL=", 6)) env[k] = "SHELL=/bin/sh";
+    }
+    if (!s || !(s->p = calloc(1, sizeof *s->p))) { free(s); return NULL; }
+    s->out = out; s->exited = exited; s->ctx = ctx;
+    if (!(s->tty = aoi_tty_new(out, ctx, 120, 40))) { free(s->p); free(s); return NULL; }
+    {   /* plain text out: no \r added before \n (OPOST off) */
+        uint8_t tio[44];
+        uint32_t of;
+        aoi_tty_get(s->tty, tio);
+        memcpy(&of, tio + 4, 4); of &= ~(uint32_t)1; memcpy(tio + 4, &of, 4);
+        aoi_tty_set(s->tty, tio, 36, 0);
+    }
+    if (aoi_proc_exec(s->p, root, argv[0], 3, argv, env)) { free(s->p); free(s); return NULL; }
+    aoi_proc_linux(s->p, "/root");
+    aoi_proc_attach_tty_to(s->p, s->tty);
+    s->running = 1;
+    pthread_attr_init(&at);
+    pthread_attr_setstacksize(&at, 8u << 20);
+    pthread_attr_setdetachstate(&at, PTHREAD_CREATE_DETACHED);
+    if (pthread_create(&th, &at, sess_main, s)) { pthread_attr_destroy(&at); return NULL; }
+    pthread_attr_destroy(&at);
+    return s;
+}
+
 void lx_session_input(lx_session *s, const char *b, size_t n) { if (s && s->tty) aoi_tty_input(s->tty, b, n); }
 void lx_session_resize(lx_session *s, int cols, int rows) { if (s && s->tty && cols > 0 && rows > 0) aoi_tty_resize(s->tty, cols, rows); }
 

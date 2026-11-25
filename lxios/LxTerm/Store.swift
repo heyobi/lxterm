@@ -14,14 +14,21 @@ final class Store: ObservableObject {
     static let support = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
     static let rootDir = support.appendingPathComponent("debian", isDirectory: true)
     static let sessionsDir = support.appendingPathComponent("sessions", isDirectory: true)
-    private static let okFile = rootDir.appendingPathComponent(".lxterm-ok")
+    static let okFile = rootDir.appendingPathComponent(".lxterm-ok")
     private static let idsKey = "sessionIDs"
     private static let fastKey = "acceleratedIDs"
     private static let distroKey = "sessionDistros"
 
     var current: Session? { sessions.indices.contains(selected) ? sessions[selected] : nil }
 
+    /// Shortcuts' Run Command in LxTerm: a new tab in `d` with the command typed into it.
+    func run(_ command: String, in d: Distro) {
+        newSession(d)
+        current?.typeWhenStarted(command + "\r")
+    }
+
     func boot() {
+        Store.shared = self
         try? FileManager.default.createDirectory(at: Store.sessionsDir, withIntermediateDirectories: true)
         if FileManager.default.fileExists(atPath: Store.okFile.path) { ready(); return }
         unpack()
@@ -53,13 +60,27 @@ final class Store: ObservableObject {
         }
     }
 
+    /// The engine set up once per launch (also when Shortcuts start LxTerm without a window).
+    nonisolated(unsafe) private static var engineReady = false
+    static func prepareEngine(again: Bool = false) -> Bool {
+        guard FileManager.default.fileExists(atPath: okFile.path) else { return false }
+        if !engineReady || again {                                 // (again: a fresh root after Reset)
+            engineReady = true
+            lx_engine_init(rootDir.path)
+            lx_engine_bind_files(SharedFiles.shared.root.path)
+        }
+        return true
+    }
+
+    /// The app's one store, for Shortcuts.
+    static weak var shared: Store?
+
     private func ready() {
         if ProcessInfo.processInfo.arguments.contains("-trace") {
             let docs = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             lx_engine_trace(docs.appendingPathComponent("lxterm.trace").path)
         }
-        lx_engine_init(Store.rootDir.path)
-        lx_engine_bind_files(SharedFiles.shared.root.path)
+        _ = Store.prepareEngine(again: true)
         FilesDomain.register()
         Ports.shared.start()
         phase = .ready
@@ -101,6 +122,12 @@ final class Store: ObservableObject {
         if sessions.isEmpty { sessions = [makeSession()] }
         selected = min(selected, sessions.count - 1)
         persist()
+    }
+
+    /// The tab `d` places to the right (or left), wrapping around.
+    func selectNext(_ d: Int) {
+        guard !sessions.isEmpty else { return }
+        select(((selected + d) % sessions.count + sessions.count) % sessions.count)
     }
 
     func select(_ i: Int) {

@@ -32,6 +32,11 @@ const char *lx_unpack(const char *archive, const char *dir, unsigned long *files
 lx_session *lx_session_start(const char *root, const char *snap, int cols, int rows,
                              void (*out)(void *ctx, const char *s, size_t n),
                              void (*exited)(void *ctx), void *ctx, int *resumed);
+/* Runs one command (bash -lc, or sh -lc where there is no bash) in root (NULL: the one of
+ * lx_engine_init) on a terminal of its own; out gets what it prints, exited is called when
+ * it ends (Shortcuts: Run Command and Get Output). */
+lx_session *lx_session_run(const char *root, const char *command,
+                           void (*out)(void *ctx, const char *s, size_t n), void (*exited)(void *ctx), void *ctx);
 void lx_session_input(lx_session *s, const char *b, size_t n);
 void lx_session_resize(lx_session *s, int cols, int rows);
 /* Saves the shell to its snapshot file (waits up to ~4 s): 0 saved, 1 not now (a program

@@ -45,7 +45,8 @@ final class Session: NSObject, ObservableObject, Identifiable, TerminalViewDeleg
         let tv = TerminalView(frame: CGRect(x: 0, y: 0, width: 390, height: 600))
         tv.terminalDelegate = self
         Theme.current.apply(to: tv)
-        tv.font = UIFont.monospacedSystemFont(ofSize: CGFloat(Settings.fontSize), weight: .regular)
+        tv.font = Settings.font
+        tv.getTerminal().setCursorStyle(Settings.cursor)
         let pinch = UIPinchGestureRecognizer(target: self, action: #selector(pinched(_:)))
         tv.addGestureRecognizer(pinch)
         let tap = UITapGestureRecognizer(target: self, action: #selector(tapped))
@@ -103,8 +104,22 @@ final class Session: NSObject, ObservableObject, Identifiable, TerminalViewDeleg
         }
     }
 
+    private var typeAfterStart: String?
+    /// Keys typed once the shell is up (Shortcuts).
+    func typeWhenStarted(_ s: String) {
+        if handle != nil || webRunning {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { [weak self] in self?.sendKeys(Array(s.utf8)) }
+        } else { typeAfterStart = s }
+    }
+
     /// Starts the shell (resumed from its snapshot when there is one).
     func start() {
+        defer {
+            if let t = typeAfterStart, handle != nil || webRunning {
+                typeAfterStart = nil
+                DispatchQueue.main.asyncAfter(deadline: .now() + 1.2) { [weak self] in self?.sendKeys(Array(t.utf8)) }
+            }
+        }
         guard handle == nil, !webRunning else { return }
         exited = false
         if accelerated {
@@ -256,7 +271,8 @@ final class Session: NSObject, ObservableObject, Identifiable, TerminalViewDeleg
 
     func applySettings() {
         Theme.current.apply(to: view)
-        view.font = UIFont.monospacedSystemFont(ofSize: CGFloat(Settings.fontSize), weight: .regular)
+        view.font = Settings.font
+        view.getTerminal().setCursorStyle(Settings.cursor)
     }
 
     // MARK: TerminalViewDelegate

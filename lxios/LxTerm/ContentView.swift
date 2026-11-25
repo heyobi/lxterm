@@ -67,11 +67,15 @@ struct MainView: View {
     @State private var showPorts = false
     @ObservedObject private var ports = Ports.shared
     @Environment(\.colorScheme) private var scheme
+    @Environment(\.horizontalSizeClass) private var hsize
+    @AppStorage("split") private var split = false
+    @State private var showSearch = false
+    @State private var showSnippets = false
 
     var body: some View {
         let theme = Theme.current
         VStack(spacing: 0) {
-            TabStrip(showSettings: $showSettings, showPorts: $showPorts)
+            TabStrip(showSettings: $showSettings, showPorts: $showPorts, showSearch: $showSearch, showSnippets: $showSnippets)
             GeometryReader { proxy in
                 let fold = foldFrame(proxy)
                 if let fold, fold.width > fold.height {                // laptop: above the fold
@@ -84,11 +88,18 @@ struct MainView: View {
                         Color.clear.frame(width: fold.width)
                         secondHalf.frame(width: max(100, proxy.size.width - fold.maxX))
                     }
+                } else if hsize == .regular, split, proxy.size.width > 640 {   // iPad: two shells side by side
+                    HStack(spacing: 0) {
+                        terminal(store.current).frame(width: (proxy.size.width - 1) / 2)
+                        Rectangle().fill(Color.secondary.opacity(0.35)).frame(width: 1)
+                        secondHalf
+                    }
                 } else {
                     terminal(store.current)
                 }
             }
         }
+        .background { KeyCommands(showSettings: $showSettings, showPorts: $showPorts, split: $split, showSearch: $showSearch, showSnippets: $showSnippets) }
         .background(Color(theme.background).ignoresSafeArea())
         .preferredColorScheme(Theme.automatic ? nil : theme.isDark ? .dark : .light)
         .onChange(of: scheme) { _, _ in                            // Automatic: the iPhone turned light or dark
@@ -105,6 +116,8 @@ struct MainView: View {
         }
         .animation(.spring(duration: 0.3), value: ports.announced)
         .sheet(isPresented: $showSettings) { SettingsView().environmentObject(store) }
+        .sheet(isPresented: $showSearch) { if let s = store.current { SearchView(session: s) } }
+        .sheet(isPresented: $showSnippets) { SnippetsView().environmentObject(store).presentationDetents([.medium, .large]) }
         .sheet(isPresented: $showPorts) {
             PortsView { u in DispatchQueue.main.asyncAfter(deadline: .now() + 0.35) { browser = BrowserPage(url: u) } }
                 .presentationDetents([.medium, .large])
@@ -125,7 +138,8 @@ struct MainView: View {
     }
 
     @ViewBuilder private var secondHalf: some View {
-        let others = store.sessions.indices.filter { $0 != store.selected }
+        let n = store.sessions.count
+        let others = (1..<max(n, 1)).map { (store.selected + $0) % n }.filter { $0 != store.selected }   // the next tab first
         if let i = others.first {
             terminal(store.sessions[i])
         } else {
@@ -138,11 +152,54 @@ struct MainView: View {
     }
 }
 
+/// A hardware keyboard's shortcuts (iPad, or a keyboard on the iPhone): hold ⌘ to see them.
+struct KeyCommands: View {
+    @EnvironmentObject var store: Store
+    @Binding var showSettings: Bool
+    @Binding var showPorts: Bool
+    @Binding var split: Bool
+    @Binding var showSearch: Bool
+    @Binding var showSnippets: Bool
+
+    var body: some View {
+        ZStack {
+            Button("Search the Output") { showSearch = true }.keyboardShortcut("f", modifiers: .command)
+            Button("Saved Commands") { showSnippets = true }.keyboardShortcut("k", modifiers: .command)
+            Button("New Tab") { store.newSession() }.keyboardShortcut("t", modifiers: .command)
+            Button("Close Tab") { if let s = store.current { store.close(s) } }.keyboardShortcut("w", modifiers: .command)
+            Button("Next Tab") { store.selectNext(1) }.keyboardShortcut("]", modifiers: [.command, .shift])
+            Button("Previous Tab") { store.selectNext(-1) }.keyboardShortcut("[", modifiers: [.command, .shift])
+            ForEach(1..<10) { i in
+                Button("Tab \(i)") { if store.sessions.count >= i { store.select(i - 1) } }
+                    .keyboardShortcut(KeyEquivalent(Character(String(i))), modifiers: .command)
+            }
+            Button("Bigger Text") { KeyCommands.font(+1) }.keyboardShortcut("+", modifiers: .command)
+            Button("Bigger Text") { KeyCommands.font(+1) }.keyboardShortcut("=", modifiers: .command)
+            Button("Smaller Text") { KeyCommands.font(-1) }.keyboardShortcut("-", modifiers: .command)
+            Button("Ports") { showPorts = true }.keyboardShortcut("p", modifiers: [.command, .shift])
+            Button("Settings") { showSettings = true }.keyboardShortcut(",", modifiers: .command)
+            Button("Split View") { split.toggle() }.keyboardShortcut("d", modifiers: .command)
+        }
+        .opacity(0)
+        .frame(width: 0, height: 0)
+        .accessibilityHidden(true)
+    }
+
+    static func font(_ d: Double) {
+        Settings.fontSize = min(28, max(8, Settings.fontSize + d))
+        NotificationCenter.default.post(name: .lxFontChanged, object: nil)
+    }
+}
+
 struct TabStrip: View {
     @EnvironmentObject var store: Store
     @Binding var showSettings: Bool
     @Binding var showPorts: Bool
+    @Binding var showSearch: Bool
+    @Binding var showSnippets: Bool
     @ObservedObject private var ports = Ports.shared
+    @Environment(\.horizontalSizeClass) private var hsize
+    @AppStorage("split") private var split = false
 
     var body: some View {
         HStack(spacing: 8) {
@@ -169,7 +226,16 @@ struct TabStrip: View {
                     }
             }
             .accessibilityLabel(Text("Ports: servers running in the shells"))
+            if hsize == .regular {
+                Button { split.toggle() } label: { Image(systemName: split ? "rectangle" : "rectangle.split.2x1") }
+                    .accessibilityLabel(Text("Split View"))
+            }
             NewTabButton()
+            Menu {
+                Button("Saved Commands", systemImage: "text.badge.star") { showSnippets = true }
+                Button("Search the Output", systemImage: "magnifyingglass") { showSearch = true }
+            } label: { Image(systemName: "ellipsis.circle") }
+                .accessibilityLabel(Text("More"))
             Button { showSettings = true } label: { Image(systemName: "gearshape") }
                 .accessibilityLabel(Text("Settings"))
                 .padding(.trailing, 12)

@@ -7,6 +7,25 @@ enum Settings {
         get { let v = UserDefaults.standard.double(forKey: "fontSize"); return v > 0 ? v : 13 }
         set { UserDefaults.standard.set(newValue, forKey: "fontSize") }
     }
+
+    /// The fonts iOS has that keep columns: SF Mono (the system's), Menlo, Courier New.
+    static let fonts: [(id: String, name: String)] = [("system", "SF Mono"), ("Menlo-Regular", "Menlo"), ("CourierNewPSMT", "Courier New")]
+
+    static var font: UIFont {
+        let size = CGFloat(fontSize)
+        let id = UserDefaults.standard.string(forKey: "font") ?? "system"
+        if id != "system", let f = UIFont(name: id, size: size) { return f }
+        return UIFont.monospacedSystemFont(ofSize: size, weight: .regular)
+    }
+
+    static var cursor: CursorStyle {
+        let blink = UserDefaults.standard.object(forKey: "cursorBlink") as? Bool ?? true
+        switch UserDefaults.standard.string(forKey: "cursor") ?? "block" {
+        case "underline": return blink ? .blinkUnderline : .steadyUnderline
+        case "bar": return blink ? .blinkBar : .steadyBar
+        default: return blink ? .blinkBlock : .steadyBlock
+        }
+    }
 }
 
 /// Terminal colours.
@@ -53,6 +72,9 @@ struct SettingsView: View {
     @Environment(\.dismiss) private var dismiss
     @AppStorage("theme") private var theme = "night"
     @AppStorage("webEngine") private var webEngine = false
+    @AppStorage("font") private var font = "system"
+    @AppStorage("cursor") private var cursor = "block"
+    @AppStorage("cursorBlink") private var cursorBlink = true
     @State private var size = Settings.fontSize
     @State private var confirmReset = false
 
@@ -65,6 +87,13 @@ struct SettingsView: View {
                         Slider(value: $size, in: 8...28, step: 1)
                         Text("\(Int(size))").monospacedDigit().frame(width: 28)
                     }
+                    Picker("Font", selection: $font) {
+                        ForEach(Settings.fonts, id: \.id) { f in Text(f.name).tag(f.id) }
+                    }
+                    Picker("Cursor", selection: $cursor) {
+                        Text("Block").tag("block"); Text("Underline").tag("underline"); Text("Bar").tag("bar")
+                    }
+                    Toggle("Blinking cursor", isOn: $cursorBlink)
                     Text("Pinch the terminal to change the size too.").font(.footnote).foregroundStyle(.secondary)
                 }
                 Section("Colours") {
@@ -109,6 +138,9 @@ struct SettingsView: View {
                 NotificationCenter.default.post(name: .lxFontChanged, object: nil)
             }
             .onChange(of: theme) { _, _ in NotificationCenter.default.post(name: .lxFontChanged, object: nil) }
+            .onChange(of: font) { _, _ in NotificationCenter.default.post(name: .lxFontChanged, object: nil) }
+            .onChange(of: cursor) { _, _ in NotificationCenter.default.post(name: .lxFontChanged, object: nil) }
+            .onChange(of: cursorBlink) { _, _ in NotificationCenter.default.post(name: .lxFontChanged, object: nil) }
             .confirmationDialog("Reset Debian?", isPresented: $confirmReset, titleVisibility: .visible) {
                 Button("Erase and unpack again", role: .destructive) { dismiss(); store.reset() }
             } message: {

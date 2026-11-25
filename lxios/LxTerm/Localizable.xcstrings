@@ -811,6 +811,586 @@
           }
         }
       }
+    },
+    "New Tab": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yeni Sekme"
+          }
+        }
+      }
+    },
+    "Close Tab": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sekmeyi Kapat"
+          }
+        }
+      }
+    },
+    "Next Tab": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sonraki Sekme"
+          }
+        }
+      }
+    },
+    "Previous Tab": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Önceki Sekme"
+          }
+        }
+      }
+    },
+    "Tab %lld": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sekme %lld"
+          }
+        }
+      }
+    },
+    "Bigger Text": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yazıyı Büyüt"
+          }
+        }
+      }
+    },
+    "Smaller Text": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yazıyı Küçült"
+          }
+        }
+      }
+    },
+    "Split View": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bölünmüş Görünüm"
+          }
+        }
+      }
+    },
+    "Search the Output": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Çıktıda Ara"
+          }
+        }
+      }
+    },
+    "Saved Commands": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kayıtlı Komutlar"
+          }
+        }
+      }
+    },
+    "More": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diğer"
+          }
+        }
+      }
+    },
+    "No matches": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Eşleşme yok"
+          }
+        }
+      }
+    },
+    "Search the output": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Çıktıda ara"
+          }
+        }
+      }
+    },
+    "Copied": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kopyalandı"
+          }
+        }
+      }
+    },
+    "Tap a command to type it into the shown tab. Swipe to edit or delete.": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bir komuta dokunun, açık sekmeye yazılsın. Düzenlemek ya da silmek için kaydırın."
+          }
+        }
+      }
+    },
+    "New command": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yeni komut"
+          }
+        }
+      }
+    },
+    "Name": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ad"
+          }
+        }
+      }
+    },
+    "Command": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Komut"
+          }
+        }
+      }
+    },
+    "Run it (press Return)": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Çalıştır (Return'e bas)"
+          }
+        }
+      }
+    },
+    "Cancel": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vazgeç"
+          }
+        }
+      }
+    },
+    "Save": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kaydet"
+          }
+        }
+      }
+    },
+    "Delete": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sil"
+          }
+        }
+      }
+    },
+    "Edit": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Düzenle"
+          }
+        }
+      }
+    },
+    "Update packages": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Paketleri güncelle"
+          }
+        }
+      }
+    },
+    "System info": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sistem bilgisi"
+          }
+        }
+      }
+    },
+    "Web server in /root/Files": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "/root/Files'ta web sunucusu"
+          }
+        }
+      }
+    },
+    "Run Command in LxTerm": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "LxTerm'de Komut Çalıştır"
+          }
+        }
+      }
+    },
+    "Opens a new tab in the chosen distribution and runs the command in it, as if typed.": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Seçilen dağıtımda yeni bir sekme açar ve komutu yazılmış gibi çalıştırır."
+          }
+        }
+      }
+    },
+    "Run Command and Get Output": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Komutu Çalıştır ve Çıktıyı Al"
+          }
+        }
+      }
+    },
+    "Runs the command in the chosen distribution and returns what it printed, for the next actions of a shortcut. It stops after the time limit.": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Komutu seçilen dağıtımda çalıştırır ve yazdıklarını kısayolun sonraki adımlarına verir. Süre sınırında durur."
+          }
+        }
+      }
+    },
+    "Distribution": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Dağıtım"
+          }
+        }
+      }
+    },
+    "Time limit (seconds)": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Süre sınırı (saniye)"
+          }
+        }
+      }
+    },
+    "Run %@ in %@": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ komutunu %@ içinde çalıştır"
+          }
+        }
+      }
+    },
+    "Open LxTerm once first: Debian is unpacked on the first start.": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Önce LxTerm'i bir kez açın: Debian ilk açılışta kurulur."
+          }
+        }
+      }
+    },
+    "%@ is not downloaded. Download it in LxTerm › Settings › Distributions.": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ indirilmemiş. LxTerm › Ayarlar › Dağıtımlar'dan indirin."
+          }
+        }
+      }
+    },
+    "The command could not be started.": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Komut başlatılamadı."
+          }
+        }
+      }
+    },
+    "Run Command": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Komut Çalıştır"
+          }
+        }
+      }
+    },
+    "Run in a Tab": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sekmede Çalıştır"
+          }
+        }
+      }
+    },
+    "Font": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yazı tipi"
+          }
+        }
+      }
+    },
+    "Cursor": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "İmleç"
+          }
+        }
+      }
+    },
+    "Block": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Blok"
+          }
+        }
+      }
+    },
+    "Underline": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Alt çizgi"
+          }
+        }
+      }
+    },
+    "Bar": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Çubuk"
+          }
+        }
+      }
+    },
+    "Blinking cursor": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yanıp sönen imleç"
+          }
+        }
+      }
+    },
+    "Saved Command": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kayıtlı Komut"
+          }
+        }
+      }
+    },
+    "Run Saved Command": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kayıtlı Komutu Çalıştır"
+          }
+        }
+      }
+    },
+    "Runs one of LxTerm's saved commands and returns what it printed.": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "LxTerm'deki kayıtlı komutlardan birini çalıştırır ve yazdıklarını döndürür."
+          }
+        }
+      }
+    },
+    "Done.": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tamam."
+          }
+        }
+      }
+    },
+    "Run every day…": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Her gün çalıştır…"
+          }
+        }
+      }
+    },
+    "Every saved command is also in the Shortcuts app and works with Siri by its name: no need to type it again.": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Her kayıtlı komut Kestirmeler uygulamasında da görünür ve Siri ile adıyla çalışır: yeniden yazmanıza gerek yok."
+          }
+        }
+      }
+    },
+    "Open Shortcuts, tap Automation, then + (New Automation).": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kestirmeler'i açın, Otomasyon'a, sonra + (Yeni Otomasyon) düğmesine dokunun."
+          }
+        }
+      }
+    },
+    "Choose Time of Day, set the time and Daily, and pick Run Immediately.": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Günün Saati'ni seçin, saati ve Her Gün'ü ayarlayın, Hemen Çalıştır'ı seçin."
+          }
+        }
+      }
+    },
+    "Add the action LxTerm › Run Saved Command and choose your command from the list. Add Show Notification after it to see what it printed.": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "LxTerm › Kayıtlı Komutu Çalıştır eylemini ekleyin ve listeden komutunuzu seçin. Sonucunu görmek için ardından Bildirim Göster ekleyin."
+          }
+        }
+      }
+    },
+    "iOS gives such actions about 30 seconds: fetching a web page, a small script or writing a file fits. Longer jobs: use Run Command in LxTerm, which opens a tab.": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "iOS bu tür eylemlere yaklaşık 30 saniye verir: bir sayfadan veri çekmek, küçük bir betik ya da dosya yazmak sığar. Uzun işler için sekme açan LxTerm'de Komut Çalıştır'ı kullanın."
+          }
+        }
+      }
+    },
+    "Example": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Örnek"
+          }
+        }
+      }
+    },
+    "Save it as a command named Weather, then say “LxTerm Weather” to Siri, or run it every morning with the steps above.": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bunu Weather adıyla kaydedin, sonra Siri'ye “LxTerm Weather” deyin ya da yukarıdaki adımlarla her sabah çalıştırın."
+          }
+        }
+      }
+    },
+    "Run Every Day": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Her Gün Çalıştır"
+          }
+        }
+      }
+    },
+    "Weather": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hava durumu"
+          }
+        }
+      }
     }
   }
 }
