@@ -1391,6 +1391,16 @@
           }
         }
       }
+    },
+    "Enjoying LxTerm? See my other apps": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "LxTerm'i beğendin mi? Diğer uygulamalarıma göz at"
+          }
+        }
+      }
     }
   }
 }

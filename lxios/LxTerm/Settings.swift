@@ -124,6 +124,9 @@ struct SettingsView: View {
                 Section("About") {
                     Text("Debian's own arm64 programs, unmodified, run on this iPhone in a no-JIT AArch64 interpreter with a Linux system-call layer. Not affiliated with the Debian Project.")
                         .font(.footnote)
+                    Link(destination: URL(string: "https://apps.apple.com/developer/id6820301575")!) {
+                        Label("Enjoying LxTerm? See my other apps", systemImage: "app.badge.checkmark")
+                    }
                     Link("Source code (GPL-3.0)", destination: URL(string: "https://github.com/heyobi/lxterm")!)
                     Link("Debian package sources", destination: URL(string: "https://sources.debian.org")!)
                     Link("Privacy", destination: URL(string: "https://github.com/heyobi/lxterm/blob/main/PRIVACY.md")!)
