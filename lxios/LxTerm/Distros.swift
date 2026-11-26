@@ -129,6 +129,7 @@ struct Distro: Identifiable, Hashable {
         try Task.checkCancellation()
         progress(0.95)
         lx_engine_prepare_root(tmpRoot.path)
+        Distro.installServiceTools(tmpRoot)
         guard await Distro.shellStarts(in: tmpRoot) else { throw Failure.noStart }
         try Task.checkCancellation()
         if keepUserFiles { Distro.moveUserFiles(from: root, to: tmpRoot) }
@@ -146,6 +147,33 @@ struct Distro: Identifiable, Hashable {
     static func shellStarts(in root: URL) async -> Bool {
         guard let out = try? await Headless.run("echo lxterm-shell-ok", root: root.path, seconds: 90) else { return false }
         return out.contains("lxterm-shell-ok")
+    }
+
+    /// LxTerm's systemctl and journalctl (systemctl.sh: the services packages install, run
+    /// without systemd) in /usr/local/bin, first in a tab's PATH, and the hook that starts
+    /// enabled services when a tab opens. Written when missing or changed; the
+    /// distribution's own files are left as they are.
+    static func installServiceTools(_ root: URL) {
+        guard let src = Bundle.main.url(forResource: "systemctl", withExtension: "sh"), let data = try? Data(contentsOf: src) else { return }
+        let fm = FileManager.default
+        let bin = root.appendingPathComponent("usr/local/bin", isDirectory: true)
+        try? fm.createDirectory(at: bin, withIntermediateDirectories: true)
+        let tool = bin.appendingPathComponent("systemctl")
+        if (try? Data(contentsOf: tool)) != data {
+            try? fm.removeItem(at: tool)
+            fm.createFile(atPath: tool.path, contents: data, attributes: [.posixPermissions: 0o755])
+        }
+        let journal = bin.appendingPathComponent("journalctl")
+        if (try? fm.destinationOfSymbolicLink(atPath: journal.path)) != "systemctl" {
+            try? fm.removeItem(at: journal)
+            try? fm.createSymbolicLink(atPath: journal.path, withDestinationPath: "systemctl")
+        }
+        let profile = root.appendingPathComponent("etc/profile.d", isDirectory: true)
+        try? fm.createDirectory(at: profile, withIntermediateDirectories: true)
+        let hook = profile.appendingPathComponent("lxterm-services.sh")
+        let text = "# LxTerm: services enabled with systemctl start again when a tab opens (/usr/local/bin/systemctl)\n"
+            + "[ -d /etc/lxterm/autostart ] && [ -x /usr/local/bin/systemctl ] && (/usr/local/bin/systemctl --lxterm-autostart >/dev/null 2>&1 &)\n"
+        if (try? String(contentsOf: hook, encoding: .utf8)) != text { try? Data(text.utf8).write(to: hook) }
     }
 
     /// Repair: the user's own files (/root, with its dotfiles and history, and /home) go

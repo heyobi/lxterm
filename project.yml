@@ -24,6 +24,9 @@ targets:
     platform: iOS
     sources:
       - path: lxios/LxTerm
+        excludes: ["systemctl.sh"]
+      - path: lxios/LxTerm/systemctl.sh   # put into each distribution's /usr/local/bin (Distros.swift)
+        buildPhase: resources
       - path: core
         includes: ["*.c", "*.h"]
         excludes: ["oracle.c"]
