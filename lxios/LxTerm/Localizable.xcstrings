@@ -1951,6 +1951,26 @@
           }
         }
       }
+    },
+    "Keep screen on while a command runs": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Komut çalışırken ekranı açık tut"
+          }
+        }
+      }
+    },
+    "iOS pauses LxTerm when the screen locks, and a long command (an install, a build) stops until you come back. At the prompt the screen locks as usual.": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ekran kilitlenince iOS LxTerm'i duraklatır; uzun bir komut (kurulum, derleme) siz dönene kadar durur. Komut satırındayken ekran her zamanki gibi kilitlenir."
+          }
+        }
+      }
     }
   }
 }

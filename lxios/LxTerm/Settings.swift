@@ -100,6 +100,7 @@ struct SettingsView: View {
     @AppStorage("cursor") private var cursor = "block"
     @AppStorage("cursorBlink") private var cursorBlink = true
     @AppStorage("distroColours") private var distroColours = true
+    @AppStorage("keepAwake") private var keepAwake = true
     @State private var size = Settings.fontSize
     @State private var resetting: Distro?
     @ObservedObject private var distros = DistroManager.shared
@@ -142,6 +143,11 @@ struct SettingsView: View {
                     }
                 } footer: {
                     Text("Ubuntu, Alpine Linux, Fedora, AlmaLinux, Rocky Linux, openSUSE and Arch Linux ARM can be downloaded for new tabs, beside Debian.")
+                }
+                Section {
+                    Toggle("Keep screen on while a command runs", isOn: $keepAwake)
+                } footer: {
+                    Text("iOS pauses LxTerm when the screen locks, and a long command (an install, a build) stops until you come back. At the prompt the screen locks as usual.")
                 }
                 Section {
                     Toggle("Accelerated engine (beta)", isOn: $webEngine)

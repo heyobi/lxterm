@@ -93,6 +93,7 @@ final class Store: ObservableObject {
         FilesDomain.register()
         Examples.install(in: SharedFiles.shared.root)
         Ports.shared.start()
+        Awake.shared.start(self)
         phase = .ready
         let ids = UserDefaults.standard.stringArray(forKey: Store.idsKey) ?? []
         let fast = Set(UserDefaults.standard.stringArray(forKey: Store.fastKey) ?? [])
@@ -237,4 +238,28 @@ final class Store: ObservableObject {
 final class ProgressBox {
     let report: (Double) -> Void
     init(_ r: @escaping (Double) -> Void) { report = r }
+}
+
+/// While a command runs in a tab (its foreground program is not the shell), the screen does
+/// not lock by itself: iOS pauses an app it does not show, so a dnf install or a build would
+/// stop halfway. At the prompt the usual auto-lock is back. Settings › Keep screen on.
+@MainActor
+final class Awake {
+    static let shared = Awake()
+    private var timer: Timer?
+    private weak var store: Store?
+
+    func start(_ s: Store) {
+        store = s
+        timer?.invalidate()
+        timer = Timer.scheduledTimer(withTimeInterval: 2, repeats: true) { _ in
+            Task { @MainActor in Awake.shared.check() }
+        }
+    }
+
+    private func check() {
+        let on = UserDefaults.standard.object(forKey: "keepAwake") as? Bool ?? true
+        let busy = on && (store?.sessions.contains { $0.runningProgram } ?? false)
+        if UIApplication.shared.isIdleTimerDisabled != busy { UIApplication.shared.isIdleTimerDisabled = busy }
+    }
 }

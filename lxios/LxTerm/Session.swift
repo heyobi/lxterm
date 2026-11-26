@@ -235,6 +235,14 @@ final class Session: NSObject, ObservableObject, Identifiable, TerminalViewDeleg
         updateTitle()
     }
 
+    /// A program other than the shell is in the foreground (Awake: the screen stays on).
+    var runningProgram: Bool {
+        guard let handle, !exited else { return false }
+        var buf = [CChar](repeating: 0, count: 64)
+        lx_session_title(handle, &buf, 64)
+        return !["", "bash", "sh", "dash", "ash", "zsh", "fish", "busybox", "login"].contains(String(cString: buf))
+    }
+
     private func updateTitle() {
         guard let handle else { return }
         var buf = [CChar](repeating: 0, count: 64)
