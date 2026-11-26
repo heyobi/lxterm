@@ -140,7 +140,7 @@ final class FileItem: NSObject, NSFileProviderItem {
         guard let i = rel.lastIndex(of: "/") else { return .rootContainer }
         return NSFileProviderItemIdentifier(String(rel[..<i]))
     }
-    var filename: String { rel.isEmpty ? "LxTerm" : String(rel.split(separator: "/").last ?? "") }
+    var filename: String { rel.isEmpty ? "Pocket Distro" : String(rel.split(separator: "/").last ?? "") }
     var contentType: UTType {
         if isDir { return .folder }
         if st.st_mode & S_IFMT == S_IFLNK { return .symbolicLink }

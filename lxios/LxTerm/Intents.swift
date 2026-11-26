@@ -18,8 +18,8 @@ enum IntentFailure: LocalizedError {
     case notReady, notDownloaded(String), failed
     var errorDescription: String? {
         switch self {
-        case .notReady: return String(localized: "Open LxTerm once first: Debian is unpacked on the first start.")
-        case .notDownloaded(let n): return String(localized: "\(n) is not downloaded. Download it in LxTerm › Settings › Distributions.")
+        case .notReady: return String(localized: "Open Pocket Distro once first: Debian is unpacked on the first start.")
+        case .notDownloaded(let n): return String(localized: "\(n) is not downloaded. Download it in Pocket Distro › Settings › Distributions.")
         case .failed: return String(localized: "The command could not be started.")
         }
     }
@@ -27,12 +27,12 @@ enum IntentFailure: LocalizedError {
 
 /// Opens LxTerm with a new tab in the distribution, the command typed into its shell.
 struct RunInTerminalIntent: AppIntent {
-    static var title: LocalizedStringResource = "Run Command in LxTerm"
+    static var title: LocalizedStringResource = "Run Command in Pocket Distro"
     static var description = IntentDescription("Opens a new tab in the chosen distribution and runs the command in it, as if typed.")
     static var openAppWhenRun = true
 
     @Parameter(title: "Command") var command: String
-    @Parameter(title: "Distribution", description: "Empty: the default distribution in LxTerm’s Settings.") var distribution: DistroOption?
+    @Parameter(title: "Distribution", description: "Empty: the default distribution in Pocket Distro’s Settings.") var distribution: DistroOption?
 
     static var parameterSummary: some ParameterSummary {
         Summary("Run \(\.$command) in \(\.$distribution)")
@@ -55,7 +55,7 @@ struct RunCommandIntent: AppIntent {
     static var description = IntentDescription("Runs the command in the chosen distribution and returns what it printed, for the next actions of a shortcut. It stops after the time limit.")
 
     @Parameter(title: "Command") var command: String
-    @Parameter(title: "Distribution", description: "Empty: the default distribution in LxTerm’s Settings.") var distribution: DistroOption?
+    @Parameter(title: "Distribution", description: "Empty: the default distribution in Pocket Distro’s Settings.") var distribution: DistroOption?
     @Parameter(title: "Time limit (seconds)", default: 25, inclusiveRange: (1, 25)) var seconds: Int
     @Parameter(title: "Input", description: "Text given to the command on its standard input.") var input: String?
 
@@ -179,10 +179,10 @@ struct SnippetQuery: EntityStringQuery {
 /// Runs a saved command and gives back what it printed (Siri reads it out).
 struct RunSnippetIntent: AppIntent {
     static var title: LocalizedStringResource = "Run Saved Command"
-    static var description = IntentDescription("Runs one of LxTerm's saved commands and returns what it printed.")
+    static var description = IntentDescription("Runs one of Pocket Distro's saved commands and returns what it printed.")
 
     @Parameter(title: "Saved Command") var snippet: SnippetEntity
-    @Parameter(title: "Distribution", description: "Empty: the default distribution in LxTerm’s Settings.") var distribution: DistroOption?
+    @Parameter(title: "Distribution", description: "Empty: the default distribution in Pocket Distro’s Settings.") var distribution: DistroOption?
     @Parameter(title: "Input", description: "Text given to the command on its standard input.") var input: String?
 
     static var parameterSummary: some ParameterSummary { Summary("Run \(\.$snippet) in \(\.$distribution)") { \.$input } }

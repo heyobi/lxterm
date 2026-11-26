@@ -5,7 +5,7 @@ import Foundation
 /// added once at launch; while the app runs, the working set is signalled every few seconds
 /// so that what Linux programs write into /root/Files shows up in Files.
 enum FilesDomain {
-    static let domain = NSFileProviderDomain(identifier: NSFileProviderDomainIdentifier("lxterm"), displayName: "LxTerm")
+    static let domain = NSFileProviderDomain(identifier: NSFileProviderDomainIdentifier("lxterm"), displayName: "Pocket Distro")
     private static var timer: Timer?
 
     static func register() {

@@ -148,12 +148,12 @@ struct SettingsView: View {
                 Section {
                     Toggle("Keep screen on while a command runs", isOn: $keepAwake)
                 } footer: {
-                    Text("iOS pauses LxTerm when the screen locks, and a long command (an install, a build) stops until you come back. At the prompt the screen locks as usual.")
+                    Text("iOS pauses Pocket Distro when the screen locks, and a long command (an install, a build) stops until you come back. At the prompt the screen locks as usual.")
                 }
                 Section {
                     Toggle("Speed-ups", isOn: $acceleration)
                 } footer: {
-                    Text("AlmaLinux's package tools run partly as code translated ahead of time, and dnf continues from a saved start instead of starting Python for every command. If a program behaves unexpectedly, turn this off to compare; it applies the next time LxTerm starts.")
+                    Text("AlmaLinux's package tools run partly as code translated ahead of time, and dnf continues from a saved start instead of starting Python for every command. If a program behaves unexpectedly, turn this off to compare; it applies the next time Pocket Distro starts.")
                 }
                 Section {
                     Toggle("Accelerated engine (beta)", isOn: $webEngine)
@@ -174,7 +174,7 @@ struct SettingsView: View {
                     Text("Linux distributions' own arm64 programs (Debian, Ubuntu, Alpine Linux, Fedora, AlmaLinux, Rocky Linux, openSUSE, Arch Linux ARM), unmodified, run on this iPhone in a no-JIT AArch64 interpreter with a Linux system-call layer. Not affiliated with or endorsed by these projects.")
                         .font(.footnote)
                     Link(destination: URL(string: "https://apps.apple.com/developer/id6820301575")!) {
-                        Label("Enjoying LxTerm? See my other apps", systemImage: "app.badge.checkmark")
+                        Label("Enjoying Pocket Distro? See my other apps", systemImage: "app.badge.checkmark")
                     }
                     Link("Source code (GPL-3.0)", destination: URL(string: "https://github.com/heyobi/lxterm")!)
                     NavigationLink("Package sources") { PackageSourcesView() }

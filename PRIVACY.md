@@ -1,6 +1,8 @@
-# LxTerm privacy policy
+# Pocket Distro privacy policy
 
-LxTerm does not collect, store or share any personal data.
+Pocket Distro was called LxTerm until November 2026; this policy covers both names.
+
+Pocket Distro does not collect, store or share any personal data.
 
 - No accounts, no analytics, no advertising, no tracking.
 - Linux (Debian, and any other distribution you download) runs entirely on your device, inside the app's own storage. Your files, installed packages and command history stay there; deleting the app deletes them.
@@ -9,6 +11,6 @@ LxTerm does not collect, store or share any personal data.
 - **Shortcuts and Siri.** Commands run from the Shortcuts app run on the device, like commands typed in a tab; their output goes only to the shortcut that ran them.
 - DNS servers are read from your iPhone's settings so programs in the terminal can look up names.
 
-Questions: open an issue at https://github.com/heyobi/lxterm/issues
+Questions: hello@pocketdistro.com, or open an issue at https://github.com/pocketdistro/pocketdistro/issues
 
-Last updated: 25 November 2026
+Last updated: 27 November 2026

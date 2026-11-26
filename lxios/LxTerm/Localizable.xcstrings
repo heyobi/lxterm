@@ -542,12 +542,12 @@
         }
       }
     },
-    "Servers listening in your shells. They keep running while LxTerm is open.": {
+    "Servers listening in your shells. They keep running while Pocket Distro is open.": {
       "localizations": {
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Kabuklarınızda dinleyen sunucular. LxTerm açık kaldıkça çalışmaya devam ederler."
+            "value": "Kabuklarınızda dinleyen sunucular. Pocket Distro açık kaldıkça çalışmaya devam ederler."
           }
         }
       }
@@ -1022,12 +1022,12 @@
         }
       }
     },
-    "Run Command in LxTerm": {
+    "Run Command in Pocket Distro": {
       "localizations": {
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "LxTerm'de Komut Çalıştır"
+            "value": "Pocket Distro'da Komut Çalıştır"
           }
         }
       }
@@ -1092,22 +1092,22 @@
         }
       }
     },
-    "Open LxTerm once first: Debian is unpacked on the first start.": {
+    "Open Pocket Distro once first: Debian is unpacked on the first start.": {
       "localizations": {
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Önce LxTerm'i bir kez açın: Debian ilk açılışta kurulur."
+            "value": "Önce Pocket Distro'yu bir kez açın: Debian ilk açılışta kurulur."
           }
         }
       }
     },
-    "%@ is not downloaded. Download it in LxTerm › Settings › Distributions.": {
+    "%@ is not downloaded. Download it in Pocket Distro › Settings › Distributions.": {
       "localizations": {
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "%@ indirilmemiş. LxTerm › Ayarlar › Dağıtımlar'dan indirin."
+            "value": "%@ indirilmemiş. Pocket Distro › Ayarlar › Dağıtımlar'dan indirin."
           }
         }
       }
@@ -1222,12 +1222,12 @@
         }
       }
     },
-    "Runs one of LxTerm's saved commands and returns what it printed.": {
+    "Runs one of Pocket Distro's saved commands and returns what it printed.": {
       "localizations": {
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "LxTerm'deki kayıtlı komutlardan birini çalıştırır ve yazdıklarını döndürür."
+            "value": "Pocket Distro'daki kayıtlı komutlardan birini çalıştırır ve yazdıklarını döndürür."
           }
         }
       }
@@ -1282,22 +1282,22 @@
         }
       }
     },
-    "Add the action LxTerm › Run Saved Command and choose your command from the list. Add Show Notification after it to see what it printed.": {
+    "Add the action Pocket Distro › Run Saved Command and choose your command from the list. Add Show Notification after it to see what it printed.": {
       "localizations": {
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "LxTerm › Kayıtlı Komutu Çalıştır eylemini ekleyin ve listeden komutunuzu seçin. Sonucunu görmek için ardından Bildirim Göster ekleyin."
+            "value": "Pocket Distro › Kayıtlı Komutu Çalıştır eylemini ekleyin ve listeden komutunuzu seçin. Sonucunu görmek için ardından Bildirim Göster ekleyin."
           }
         }
       }
     },
-    "iOS gives such actions about 30 seconds: fetching a web page, a small script or writing a file fits. Longer jobs: use Run Command in LxTerm, which opens a tab.": {
+    "iOS gives such actions about 30 seconds: fetching a web page, a small script or writing a file fits. Longer jobs: use Run Command in Pocket Distro, which opens a tab.": {
       "localizations": {
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "iOS bu tür eylemlere yaklaşık 30 saniye verir: bir sayfadan veri çekmek, küçük bir betik ya da dosya yazmak sığar. Uzun işler için sekme açan LxTerm'de Komut Çalıştır'ı kullanın."
+            "value": "iOS bu tür eylemlere yaklaşık 30 saniye verir: bir sayfadan veri çekmek, küçük bir betik ya da dosya yazmak sığar. Uzun işler için sekme açan Pocket Distro'da Komut Çalıştır'ı kullanın."
           }
         }
       }
@@ -1332,12 +1332,12 @@
         }
       }
     },
-    "Enjoying LxTerm? See my other apps": {
+    "Enjoying Pocket Distro? See my other apps": {
       "localizations": {
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "LxTerm'i beğendin mi? Diğer uygulamalarıma göz at"
+            "value": "Pocket Distro'yu beğendin mi? Diğer uygulamalarıma göz at"
           }
         }
       }
@@ -1572,12 +1572,12 @@
         }
       }
     },
-    "The scripts are in Files › LxTerm › Examples (/root/Files/Examples), with a README. Change them or write your own: input from a shortcut arrives on standard input.": {
+    "The scripts are in Files › Pocket Distro › Examples (/root/Files/Examples), with a README. Change them or write your own: input from a shortcut arrives on standard input.": {
       "localizations": {
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Betikler Dosyalar › LxTerm › Examples klasöründe (/root/Files/Examples), bir README ile birlikte. Değiştirin ya da kendinizinkini yazın: kestirmeden gelen girdi standart girdiye ulaşır."
+            "value": "Betikler Dosyalar › Pocket Distro › Examples klasöründe (/root/Files/Examples), bir README ile birlikte. Değiştirin ya da kendinizinkini yazın: kestirmeden gelen girdi standart girdiye ulaşır."
           }
         }
       }
@@ -1652,12 +1652,12 @@
         }
       }
     },
-    "Empty: the default distribution in LxTerm’s Settings.": {
+    "Empty: the default distribution in Pocket Distro’s Settings.": {
       "localizations": {
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Boş: LxTerm Ayarları'ndaki varsayılan dağıtım."
+            "value": "Boş: Pocket Distro Ayarları'ndaki varsayılan dağıtım."
           }
         }
       }
@@ -1962,12 +1962,12 @@
         }
       }
     },
-    "iOS pauses LxTerm when the screen locks, and a long command (an install, a build) stops until you come back. At the prompt the screen locks as usual.": {
+    "iOS pauses Pocket Distro when the screen locks, and a long command (an install, a build) stops until you come back. At the prompt the screen locks as usual.": {
       "localizations": {
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "Ekran kilitlenince iOS LxTerm'i duraklatır; uzun bir komut (kurulum, derleme) siz dönene kadar durur. Komut satırındayken ekran her zamanki gibi kilitlenir."
+            "value": "Ekran kilitlenince iOS Pocket Distro'yu duraklatır; uzun bir komut (kurulum, derleme) siz dönene kadar durur. Komut satırındayken ekran her zamanki gibi kilitlenir."
           }
         }
       }
@@ -1982,12 +1982,12 @@
         }
       }
     },
-    "AlmaLinux's package tools run partly as code translated ahead of time, and dnf continues from a saved start instead of starting Python for every command. If a program behaves unexpectedly, turn this off to compare; it applies the next time LxTerm starts.": {
+    "AlmaLinux's package tools run partly as code translated ahead of time, and dnf continues from a saved start instead of starting Python for every command. If a program behaves unexpectedly, turn this off to compare; it applies the next time Pocket Distro starts.": {
       "localizations": {
         "tr": {
           "stringUnit": {
             "state": "translated",
-            "value": "AlmaLinux'un paket araçları kısmen önceden çevrilmiş kodla çalışır; dnf de her komutta Python'u baştan başlatmak yerine kaydedilmiş bir açılıştan devam eder. Bir program beklenmedik davranırsa karşılaştırmak için kapatın; LxTerm bir sonraki açılışında geçerli olur."
+            "value": "AlmaLinux'un paket araçları kısmen önceden çevrilmiş kodla çalışır; dnf de her komutta Python'u baştan başlatmak yerine kaydedilmiş bir açılıştan devam eder. Bir program beklenmedik davranırsa karşılaştırmak için kapatın; Pocket Distro bir sonraki açılışında geçerli olur."
           }
         }
       }

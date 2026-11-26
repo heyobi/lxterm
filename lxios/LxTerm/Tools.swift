@@ -170,9 +170,9 @@ struct AutomationGuide: View {
                 Section {
                     step(1, "Open Shortcuts, tap Automation, then + (New Automation).", "square.stack.3d.up")
                     step(2, "Choose Time of Day, set the time and Daily, and pick Run Immediately.", "clock")
-                    step(3, "Add the action LxTerm › Run Saved Command and choose your command from the list. Add Show Notification after it to see what it printed.", "terminal")
+                    step(3, "Add the action Pocket Distro › Run Saved Command and choose your command from the list. Add Show Notification after it to see what it printed.", "terminal")
                 } footer: {
-                    Text("iOS gives such actions about 30 seconds: fetching a web page, a small script or writing a file fits. Longer jobs: use Run Command in LxTerm, which opens a tab.")
+                    Text("iOS gives such actions about 30 seconds: fetching a web page, a small script or writing a file fits. Longer jobs: use Run Command in Pocket Distro, which opens a tab.")
                 }
                 Section {
                     ShortcutsLink().frame(maxWidth: .infinity)
@@ -184,7 +184,7 @@ struct AutomationGuide: View {
                     recipe("Statistics of copied text", "Get Clipboard → Run Saved Command: Text statistics, Input: Clipboard → Show Result")
                     recipe("Weather out loud", "Run Saved Command: Weather → Speak Text")
                 } header: { Text("Examples") } footer: {
-                    Text("The scripts are in Files › LxTerm › Examples (/root/Files/Examples), with a README. Change them or write your own: input from a shortcut arrives on standard input.")
+                    Text("The scripts are in Files › Pocket Distro › Examples (/root/Files/Examples), with a README. Change them or write your own: input from a shortcut arrives on standard input.")
                 }
             }
             .navigationTitle("Run Every Day")

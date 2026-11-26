@@ -78,7 +78,7 @@ targets:
     info:
       path: lxios/LxTerm/Info.plist
       properties:
-        CFBundleDisplayName: LxTerm
+        CFBundleDisplayName: "Pocket Distro"
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CFBundleDevelopmentRegion: en
@@ -128,7 +128,7 @@ targets:
     info:
       path: lxios/LxTermFiles/Info.plist
       properties:
-        CFBundleDisplayName: LxTerm
+        CFBundleDisplayName: "Pocket Distro"
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         NSExtension:

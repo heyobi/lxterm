@@ -5,11 +5,11 @@ import Foundation
 enum Examples {
     static let files: [String: String] = [
         "README.md": """
-        # LxTerm examples for Shortcuts
+        # Pocket Distro examples for Shortcuts
 
-        Each script here is also a saved command in LxTerm (… › Saved Commands), so it is in the
+        Each script here is also a saved command in Pocket Distro (… › Saved Commands), so it is in the
         Shortcuts app and works with Siri by its name. Change them, copy them, delete them: they
-        are yours, and LxTerm never puts them back.
+        are yours, and Pocket Distro never puts them back.
 
         ## Exchange rates — rates.py
         Fetches today's rates (frankfurter.app, the European Central Bank's, no key needed).
@@ -19,7 +19,7 @@ enum Examples {
         ## Note by voice — note.py
         Adds a line, with the date and time, to /root/Files/notes.md (open it in Files).
         Shortcut: **Dictate Text** → **Run Saved Command** (Save a note), with Input set to the
-        dictated text. Then say to Siri: "LxTerm Save a note".
+        dictated text. Then say to Siri: "Pocket Distro Save a note".
 
         ## Text statistics — textstats.py
         Words, lines, characters and reading time of a text.

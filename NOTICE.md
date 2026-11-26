@@ -1,6 +1,6 @@
-# LxTerm: license and third-party notices
+# Pocket Distro: license and third-party notices
 
-LxTerm (this repository: `core/`, `lxios/`, `tools/`, `tests/`, `scripts/`) is
+Pocket Distro, formerly Pocket Distro (this repository: `core/`, `lxios/`, `tools/`, `tests/`, `scripts/`) is
 Copyright (C) 2026 İbrahim Polat and contributors, free software under the GNU
 General Public License, version 3 or later (`LICENSE`, SPDX `GPL-3.0-or-later`).
 `core/` is shared with LiquidAPK (github.com/heyobi/apk-on-iphone); it contains no
@@ -29,14 +29,14 @@ None of them is modified. Each package's license is in that distribution, usuall
 `/usr/share/licenses` or `/usr/share/doc`. The names are trademarks of their owners
 (Canonical Ltd., the Alpine Linux project, Red Hat, Inc., the AlmaLinux OS Foundation,
 the Rocky Enterprise Software Foundation, SUSE LLC, Judd Vinet and Aaron Griffin);
-LxTerm is not affiliated with or endorsed by any of these projects.
+Pocket Distro is not affiliated with or endorsed by any of these projects.
 
 ## Debian
 
 The Debian programs are Debian's own binaries, unmodified. Their source code, for
 the exact versions shipped, is available from Debian: sources.debian.org, or
-`apt source <package>` after adding a `deb-src` line. LxTerm's own source is at
-github.com/heyobi/lxterm.
+`apt source <package>` after adding a `deb-src` line. Pocket Distro's own source is at
+github.com/pocketdistro/pocketdistro.
 
-Debian is a registered trademark of Software in the Public Interest, Inc. LxTerm
+Debian is a registered trademark of Software in the Public Interest, Inc. Pocket Distro
 is not affiliated with or endorsed by the Debian Project.

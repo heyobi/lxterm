@@ -1,4 +1,4 @@
-"""GitHub Pages landing page (docs/index.html) for LxTerm: SEO meta, Open Graph, JSON-LD, FAQ. Same generator as heyobi/querly."""
+"""GitHub Pages landing page (docs/index.html) for Pocket Distro: SEO meta, Open Graph, JSON-LD, FAQ. Same generator as heyobi/querly."""
 import html, json
 
 BADGE = 'app-store-badge.svg'
@@ -90,10 +90,10 @@ def page(app):
 
 
 lxterm_app = dict(
-    id='6838355342', name='LxTerm Shell', category='DeveloperApplication',
+    id='6838355342', name='Pocket Distro', category='DeveloperApplication',
     store='https://apps.apple.com/app/id6838355342',
-    site='https://heyobi.github.io/lxterm/', repo='https://github.com/heyobi/lxterm',
-    title='LxTerm: real Linux on iPhone and iPad | Debian, Ubuntu, Fedora, AlmaLinux, Arch Linux ARM, apt, dnf, pacman',
+    site='https://pocketdistro.com/', repo='https://github.com/pocketdistro/pocketdistro',
+    title='Pocket Distro: real Linux on iPhone and iPad | Debian, Ubuntu, Fedora, AlmaLinux, Arch Linux ARM, apt, dnf, pacman',
     h1='Run real Linux on your iPhone',
     lead='Eight unmodified Linux distributions on a normal, non-jailbroken iPhone and iPad, from the App Store: Debian comes with the app; Ubuntu, Alpine, Fedora, AlmaLinux, Rocky Linux, openSUSE and Arch Linux ARM are one tap away. Real apt, dnf, zypper, pacman and apk, Python, git, SSH and tmux, servers in a built-in browser, commands from Shortcuts and Siri. Free and open source.',
     description='A real Linux terminal for iPhone and iPad: eight distributions (Debian, Ubuntu, Alpine, Fedora, AlmaLinux, Rocky Linux, openSUSE, Arch Linux ARM) run unmodified on the device, with their own package managers, Python, git, SSH and tmux. No jailbreak, no cloud machine, no account.',
@@ -111,7 +111,7 @@ lxterm_app = dict(
               ('Python, git, SSH, tmux', 'Python and pip (compiled wheels included), git, OpenSSH and tmux; Ctrl-C, Ctrl-Z, fg and bg work as on any Linux machine.'),
               ('Ports and a built-in browser', 'Servers you start, such as python3 -m http.server, Flask or Jupyter, are listed with the program that opened them and open right inside the app.'),
               ('Shortcuts and Siri', 'Run commands and saved commands from the Shortcuts app and Siri, pass text in, send the output to other apps, or run them every day. Seven ready-made tools, from the weather where you are to Hacker News.'),
-              ('Files app', '/root/Files is in the Files app\'s Locations, shared by every distribution; open any file in LxTerm.'),
+              ('Files app', '/root/Files is in the Files app\'s Locations, shared by every distribution; open any file in Pocket Distro.'),
               ('Made for the phone', 'Tabs in each distribution\'s colours, a key row with Esc, Ctrl, Tab, arrows and F keys, hardware keyboard shortcuts, saved commands, search in the output, themes and fonts.'),
               ('Private and open source', 'Everything runs on your device; the network is used only when you download a distribution or run a program that needs it. No data is collected. GPL-3.0 on GitHub.')],
     extra="""<h2>On iPad</h2>
@@ -121,18 +121,18 @@ lxterm_app = dict(
     <img src="screens/v101-ipad-distros.jpg" alt="iPad: the Distributions list" loading="lazy">
 </div>
 <h2>How it works</h2>
-<p>iOS does not let apps generate machine code, so LxTerm brings its own AArch64 interpreter and a Linux system-call layer: real <code>fork</code> and <code>execve</code>, pipes, signals, job control, sockets and a terminal with Linux's line discipline. Every distribution's binaries run inside it as they would on an arm64 machine, and its continuous integration installs real packages with each package manager on every change. Starting a big program takes a few seconds and heavy computing is slower than on a computer; an accelerated engine (the same core as WebAssembly in WebKit) makes long jobs several times faster in Debian tabs. The code is open source on <a href="https://github.com/heyobi/lxterm">GitHub</a>.</p>""",
-    faq=[('Can I run Linux on an iPhone without a jailbreak?', 'Yes. Install LxTerm from the App Store and open it: Debian 13 for arm64 starts on the phone itself in a few seconds, and seven more distributions are one tap away. No jailbreak, no sideloading, no remote server.'),
+<p>iOS does not let apps generate machine code, so Pocket Distro brings its own AArch64 interpreter and a Linux system-call layer: real <code>fork</code> and <code>execve</code>, pipes, signals, job control, sockets and a terminal with Linux's line discipline. Every distribution's binaries run inside it as they would on an arm64 machine, and its continuous integration installs real packages with each package manager on every change. Package tools are sped up (on AlmaLinux, dnf starts in about 0.4 seconds) and heavy computing is slower than on a computer; an accelerated engine (the same core as WebAssembly in WebKit) makes long jobs several times faster in Debian tabs. The code is open source on <a href="https://github.com/pocketdistro/pocketdistro">GitHub</a>.</p>""",
+    faq=[('Can I run Linux on an iPhone without a jailbreak?', 'Yes. Install Pocket Distro from the App Store and open it: Debian 13 for arm64 starts on the phone itself in a few seconds, and seven more distributions are one tap away. No jailbreak, no sideloading, no remote server.'),
          ('Which Linux distributions can I run on iPhone?', 'Debian 13 (included), Ubuntu 26.04 LTS, Alpine Linux, Fedora, AlmaLinux 10, Rocky Linux 10, openSUSE Tumbleweed and Arch Linux ARM, each from its official arm64 image or repositories, unmodified.'),
          ('How do I use apt, dnf or pacman on my iPhone?', 'Open a tab in the distribution and use its package manager as usual: apt install htop in Debian or Ubuntu, dnf install htop in Fedora, AlmaLinux or Rocky Linux, pacman -S htop in Arch Linux ARM.'),
-         ('Can I run Python and pip on iPhone?', 'Yes. Python 3 is installed in Debian; pip installs packages from PyPI, including compiled ones such as polars, because LxTerm runs real Linux arm64 binaries.'),
-         ('Can I run a web server or Jupyter on iPhone?', 'Yes. Start it in a tab and it appears under Ports; open it in the built-in browser. It keeps running while LxTerm is open.'),
-         ('How is LxTerm different from iSH and a-Shell?', 'iSH emulates a 32-bit x86 PC running Alpine; a-Shell offers commands ported to iOS. LxTerm runs the distributions\' own 64-bit ARM programs unmodified, with their package managers and archives.'),
-         ('Is it fast?', 'Programs run in an interpreter, because iOS allows no JIT. Shell work, scripts, editors, git and Python are comfortable; starting a big program takes a few seconds, and heavy computing is slower than on a computer.'),
-         ('Is LxTerm free?', 'Yes, free with no ads or purchases, and open source under the GPL-3.0.')],
+         ('Can I run Python and pip on iPhone?', 'Yes. Python 3 is installed in Debian; pip installs packages from PyPI, including compiled ones such as polars, because Pocket Distro runs real Linux arm64 binaries.'),
+         ('Can I run a web server or Jupyter on iPhone?', 'Yes. Start it in a tab and it appears under Ports; open it in the built-in browser. It keeps running while Pocket Distro is open.'),
+         ('How is Pocket Distro different from iSH and a-Shell?', 'iSH emulates a 32-bit x86 PC running Alpine; a-Shell offers commands ported to iOS. Pocket Distro runs the distributions\' own 64-bit ARM programs unmodified, with their package managers and archives.'),
+         ('Is it fast?', 'Programs run in an interpreter, because iOS allows no JIT, with the package tools sped up: on AlmaLinux, dnf starts in about 0.4 seconds. Shell work, scripts, editors, git and Python are comfortable; heavy computing is slower than on a computer.'),
+         ('Is Pocket Distro free?', 'Yes, free with no ads or purchases, and open source under the GPL-3.0.')],
     sibling='<a href="https://heyobi.github.io/pgnotebook/">Tuple: PostgreSQL on iPhone</a>',
-    legal='Debian is a registered trademark of Software in the Public Interest, Inc.; the other distributions\' names are trademarks of their owners. LxTerm is not affiliated with or endorsed by any of these projects. Linux is a registered trademark of Linus Torvalds.',
+    legal='Debian is a registered trademark of Software in the Public Interest, Inc.; the other distributions\' names are trademarks of their owners. Pocket Distro is not affiliated with or endorsed by any of these projects. Linux is a registered trademark of Linus Torvalds.',
 )
 
-open('docs/index.html', 'w', encoding='utf-8').write(page(lxterm_app))
+open('docs/index.html', 'w', encoding='utf-8', newline=chr(10)).write(page(lxterm_app))
 print('ok')

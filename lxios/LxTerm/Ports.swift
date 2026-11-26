@@ -78,7 +78,7 @@ struct PortsView: View {
                             .foregroundStyle(.primary)
                         }
                     } footer: {
-                        Text("Servers listening in your shells. They keep running while LxTerm is open.")
+                        Text("Servers listening in your shells. They keep running while Pocket Distro is open.")
                     }
                 }
                 Section("Other port") {
