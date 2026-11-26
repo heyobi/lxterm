@@ -104,12 +104,10 @@ struct Distro: Identifiable, Hashable {
             guard let tarball = Bundle.main.path(forResource: "rootfs-debian", ofType: "tar.gz") else { throw Failure.unpack("rootfs-debian.tar.gz") }
             var files: UInt = 0
             if let err = lx_unpack(tarball, tmpRoot.path, &files, nil, nil) { throw Failure.unpack(String(cString: err)) }
-            image = "debian (included in the app)
-"
+            image = "debian (included in the app)\n"
         } else if repo == "archlinuxarm" {                          // its own repositories (Pacstrap.swift)
             try await Pacstrap.install(into: tmpRoot, progress: progress)
-            image = "archlinuxarm (packages from its repositories)
-"
+            image = "archlinuxarm (packages from its repositories)\n"
         } else {
             let reg = Registry(repo: repo)
             try await reg.login()
@@ -126,8 +124,7 @@ struct Distro: Identifiable, Hashable {
                 try Distro.unpack(file, into: tmpRoot)
                 Distro.applyWhiteouts(tmpRoot)
             }
-            image = "\(repo):\(tag) \(manifest.digest)
-"
+            image = "\(repo):\(tag) \(manifest.digest)\n"
         }
         try Task.checkCancellation()
         progress(0.95)
