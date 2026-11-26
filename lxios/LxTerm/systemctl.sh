@@ -324,9 +324,14 @@ case $SELF in /*) ;; *) SELF=$(command -v "$0" 2>/dev/null || echo /usr/local/bi
 me=$(basename "$0")
 if [ "$me" = journalctl ]; then journal "$@"; exit $?; fi
 
-now=0 quiet=0 args=""
+now=0 quiet=0 args="" props="" value=0 want_prop=0
 for a in "$@"; do
+    if [ $want_prop = 1 ]; then props="$props $(printf %s "$a" | tr , " ")"; want_prop=0; continue; fi
     case $a in
+    -p|--property) want_prop=1 ;;
+    -p*) props="$props ${a#-p}" ;;
+    --property=*) props="$props ${a#--property=}" ;;
+    --value) value=1 ;;
     --now) now=1 ;;
     -q|--quiet) quiet=1 ;;
     --no-pager|--no-block|--no-ask-password|--system|-l|--full|--no-legend|--plain|--all|-a) ;;
@@ -370,8 +375,21 @@ mask|unmask|preset|preset-all|daemon-reload|daemon-reexec|reset-failed|link|reve
 cat)            for u in "$@"; do setup "$u" && { say "# $F"; cat "$F"; } || rc=1; done ;;
 show)           for u in "$@"; do
                     setup "$u" || { rc=1; continue; }
-                    say "Id=$UNIT"; say "ActiveState=$(state)"; say "UnitFileState=$(enabled)"; say "MainPID=$(mainpid || echo 0)"
-                    say "Description=$(first "$F" Unit Description)"; say "FragmentPath=$F"
+                    for pn in ${props:-Id ActiveState SubState LoadState UnitFileState MainPID Description FragmentPath User Group Type}; do
+                        case $pn in
+                        Id|Names) v=$UNIT ;;
+                        ActiveState) v=$(state) ;;
+                        SubState) v=dead; running && v=running; [ -f "$ST/$UNIT.exited" ] && v=exited; [ "$(state)" = failed ] && v=failed ;;
+                        LoadState) v=loaded ;;
+                        UnitFileState) v=$(enabled) ;;
+                        MainPID) v=$(mainpid); v=${v:-0} ;;
+                        FragmentPath) v=$F ;;
+                        Description|Documentation|After|Before|Wants|Requires) v=$(first "$F" Unit "$pn") ;;
+                        WantedBy|RequiredBy|Alias) v=$(first "$F" Install "$pn") ;;
+                        *) v=$(first "$F" Service "$pn") ;;
+                        esac
+                        if [ $value = 1 ]; then say "$v"; else say "$pn=$v"; fi
+                    done
                 done ;;
 list-units|list-unit-files)
                 if [ "$cmd" = list-units ]; then list_units; else list_files; fi ;;

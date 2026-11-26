@@ -13,6 +13,7 @@ cp "$DIR/lxios/LxTerm/systemctl.sh" "$R/usr/local/bin/systemctl"; chmod 755 "$R/
 ln -sf systemctl "$R/usr/local/bin/journalctl"
 printf '[ -d /etc/lxterm/autostart ] && [ -x /usr/local/bin/systemctl ] && (/usr/local/bin/systemctl --lxterm-autostart >/dev/null 2>&1 &)\n' > "$R/etc/profile.d/lxterm-services.sh"
 cp /etc/resolv.conf "$R/etc/resolv.conf"
+grep -qw iphone "$R/etc/hosts" 2>/dev/null || printf '127.0.0.1\tiphone\t# LxTerm: the name of this machine\n' >> "$R/etc/hosts"   # (Distros.swift nameInHosts)
 lx() { LXRUN_QUIET=1 timeout "$1" "$L" "$R" /bin/bash -lc "$2" 2>&1; }
 check() {   # check NAME EXPECTED TIMEOUT SCRIPT
     t0=$(date +%s)
@@ -33,6 +34,7 @@ check "httpd: start, status, serve, journal, stop" "httpd served" 300 '
     systemctl status httpd --no-pager | head -n 6
     code=$(curl -s --max-time 15 -o /dev/null -w "%{http_code}" http://127.0.0.1:8080/); [ "$code" != 000 ] && echo "httpd served $code"
     journalctl -u httpd -n 5
+    [ "$code" = 000 ] && tail -n 15 /var/log/httpd/error_log
     systemctl stop httpd; sleep 1
     systemctl is-active httpd'
 check "nginx (Type=forking, PIDFile, ExecStartPre): start, serve, reload, stop" "nginx served" 300 '

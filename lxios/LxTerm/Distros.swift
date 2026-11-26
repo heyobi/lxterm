@@ -174,6 +174,21 @@ struct Distro: Identifiable, Hashable {
         let text = "# LxTerm: services enabled with systemctl start again when a tab opens (/usr/local/bin/systemctl)\n"
             + "[ -d /etc/lxterm/autostart ] && [ -x /usr/local/bin/systemctl ] && (/usr/local/bin/systemctl --lxterm-autostart >/dev/null 2>&1 &)\n"
         if (try? String(contentsOf: hook, encoding: .utf8)) != text { try? Data(text.utf8).write(to: hook) }
+        nameInHosts(root)
+    }
+
+    /// Every tab's machine is called "iphone" (the core's uname): /etc/hosts gets it as
+    /// 127.0.0.1, as a container runtime does, so programs that look up their own name
+    /// (httpd, sudo, Java) find it. 127.0.0.1 and not 127.0.1.1: iOS has only that one.
+    static func nameInHosts(_ root: URL) {
+        let hosts = root.appendingPathComponent("etc/hosts")
+        let text = (try? String(contentsOf: hosts, encoding: .utf8)) ?? "127.0.0.1\tlocalhost\n::1\tlocalhost\n"
+        let named = text.split(separator: "\n").contains { line in
+            !line.hasPrefix("#") && line.split(whereSeparator: { $0 == " " || $0 == "\t" }).dropFirst().contains("iphone")
+        }
+        if named { return }
+        let sep = text.isEmpty || text.hasSuffix("\n") ? "" : "\n"
+        try? Data((text + sep + "127.0.0.1\tiphone\t# LxTerm: the name of this machine\n").utf8).write(to: hosts)
     }
 
     /// LxTerm just started: no service of the last run is alive (they ended with the app),
