@@ -143,7 +143,22 @@ state() {   # active, inactive or failed
     else echo inactive; fi
 }
 
+# One start of a unit at a time: two tabs opened together both run the autostart, and the
+# second must find the service running, not start it again. (mkdir is atomic; a lock
+# left by an ended LxTerm is cleared when it starts again, or here after ~30 s.)
 start() {
+    lk="$ST/$(unitname "$1").lock" tries=0
+    while ! mkdir "$lk" 2>/dev/null; do
+        tries=$((tries + 1))
+        if [ $tries -gt 100 ]; then rmdir "$lk" 2>/dev/null; tries=0; continue; fi
+        sleep 0.3
+    done
+    start_unlocked "$1"; src=$?
+    rmdir "$lk" 2>/dev/null
+    return $src
+}
+
+start_unlocked() {
     setup "$1" || { err "Failed to start $(unitname "$1"): Unit $(unitname "$1") not found."; return 5; }
     case $UNIT in *.service) ;; *) err "LxTerm: only services can be started ($UNIT)"; return 1 ;; esac
     [ "$(state)" = active ] && return 0

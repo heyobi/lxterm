@@ -72,7 +72,10 @@ final class Store: ObservableObject {
             engineReady = true
             lx_engine_init(rootDir.path)
             lx_engine_bind_files(SharedFiles.shared.root.path)
-            for d in Distro.installed { Distro.installServiceTools(d.root) }   // (new in this version of LxTerm, or changed)
+            for d in Distro.installed {
+                Distro.installServiceTools(d.root)                 // (new in this version of LxTerm, or changed)
+                Distro.forgetServices(d.root)
+            }
         }
         return true
     }

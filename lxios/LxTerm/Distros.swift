@@ -176,6 +176,13 @@ struct Distro: Identifiable, Hashable {
         if (try? String(contentsOf: hook, encoding: .utf8)) != text { try? Data(text.utf8).write(to: hook) }
     }
 
+    /// LxTerm just started: no service of the last run is alive (they ended with the app),
+    /// so what systemctl noted about them goes - else a new process that got an old PID
+    /// would pass for the service. Enabled services start again with the first tab.
+    static func forgetServices(_ root: URL) {
+        try? FileManager.default.removeItem(at: root.appendingPathComponent("run/lxterm/units", isDirectory: true))
+    }
+
     /// Repair: the user's own files (/root, with its dotfiles and history, and /home) go
     /// into the fresh copy.
     static func moveUserFiles(from old: URL, to new: URL) {
