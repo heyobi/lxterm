@@ -1,6 +1,7 @@
 /* A .tar.gz extractor for the root file systems the app bundles (ustar, GNU long
- * names, pax path/linkpath): regular files, directories, symlinks, hard links, with
- * their modes. Device nodes and FIFOs are skipped (the core serves /dev itself).
+ * names, pax path/linkpath/mtime): regular files, directories, symlinks, hard links, with
+ * their modes and files' modification times (Python checks its .pyc against the .py's
+ * mtime: with the time of unpacking, the first python3 program recompiled every module). Device nodes and FIFOs are skipped (the core serves /dev itself).
  * Written for this project. */
 #define _DARWIN_C_SOURCE
 #include "untar.h"
@@ -11,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <unistd.h>
 #include <zlib.h>
 
@@ -28,6 +30,15 @@ static unsigned long long oct(const char *s, size_t n)
 }
 
 static int readn(gzFile g, void *b, size_t n) { return gzread(g, b, (unsigned)n) == (int)n; }
+
+static void set_mtime(int fd, long long t)
+{
+    struct timespec ts[2];
+    if (fd < 0 || t <= 0) return;
+    ts[0].tv_sec = ts[1].tv_sec = (time_t)t;
+    ts[0].tv_nsec = ts[1].tv_nsec = 0;
+    futimens(fd, ts);
+}
 
 /* mkdir -p for the parent of path. */
 static void parents(char *path)
@@ -51,7 +62,7 @@ static int clean(char *name)
     return 1;
 }
 
-static void pax(const char *b, size_t n, char *path, char *link, size_t cap)
+static void pax(const char *b, size_t n, char *path, char *link, size_t cap, long long *mtime)
 {
     size_t i = 0;
     while (i < n) {
@@ -61,6 +72,7 @@ static void pax(const char *b, size_t n, char *path, char *link, size_t cap)
         if (j < n && b[j] == ' ') j++;
         if (!strncmp(b + j, "path=", 5)) snprintf(path, cap, "%.*s", (int)(i + len - 1 - j - 5), b + j + 5);
         else if (!strncmp(b + j, "linkpath=", 9)) snprintf(link, cap, "%.*s", (int)(i + len - 1 - j - 9), b + j + 9);
+        else if (!strncmp(b + j, "mtime=", 6)) *mtime = strtoll(b + j + 6, NULL, 10);   /* (seconds; a fraction may follow) */
         i += len;
     }
 }
@@ -80,11 +92,13 @@ const char *aoi_untar_gz_progress(const char *archive, const char *dest, unsigne
     char h[512], longname[4096] = "", longlink[4096] = "", name[4096], lnk[4096], out[8192], lout[8192];
     static char buf[1 << 16];
     unsigned long count = 0;
+    long long paxtime = -1;
     if (!g) return "cannot open the archive";
     gzbuffer(g, 1 << 17);
     mkdir(dest, 0755);
     for (;;) {
         unsigned long long size, left;
+        long long mtime;
         unsigned mode;
         char type;
         if (!readn(g, h, 512)) break;
@@ -100,7 +114,7 @@ const char *aoi_untar_gz_progress(const char *archive, const char *dest, unsigne
             b[size] = 0;
             if (type == 'L') snprintf(longname, sizeof longname, "%s", b);
             else if (type == 'K') snprintf(longlink, sizeof longlink, "%s", b);
-            else if (type == 'x') pax(b, (size_t)size, longname, longlink, sizeof longname);
+            else if (type == 'x') pax(b, (size_t)size, longname, longlink, sizeof longname, &paxtime);
             free(b);
             if (pad && !readn(g, buf, (size_t)pad)) { gzclose(g); return "truncated archive"; }
             continue;
@@ -111,6 +125,11 @@ const char *aoi_untar_gz_progress(const char *archive, const char *dest, unsigne
         if (longlink[0]) snprintf(lnk, sizeof lnk, "%s", longlink);
         else snprintf(lnk, sizeof lnk, "%.100s", h + 157);
         longname[0] = longlink[0] = 0;
+        {
+            long long t = paxtime >= 0 ? paxtime : (long long)oct(h + 136, 12);
+            paxtime = -1;
+            mtime = t;
+        }
         left = (type == '0' || type == 0 || type == '7') ? size : 0;
         if (clean(name) && name[0]) {
             snprintf(out, sizeof out, "%s/%s", dest, name);
@@ -132,7 +151,7 @@ const char *aoi_untar_gz_progress(const char *archive, const char *dest, unsigne
                         ssize_t k;
                         while (a >= 0 && b >= 0 && (k = read(a, buf, sizeof buf)) > 0) if (write(b, buf, (size_t)k) != k) break;
                         if (a >= 0) close(a);
-                        if (b >= 0) { fchmod(b, (mode ? mode : 0644) | 0600); close(b); }
+                        if (b >= 0) { fchmod(b, (mode ? mode : 0644) | 0600); set_mtime(b, mtime); close(b); }
                     }
                 }
             } else if (type == '0' || type == 0 || type == '7') {
@@ -145,7 +164,7 @@ const char *aoi_untar_gz_progress(const char *archive, const char *dest, unsigne
                     if (fd >= 0 && write(fd, buf, k) != (ssize_t)k) { close(fd); gzclose(g); return "out of space"; }
                     left -= k;
                 }
-                if (fd >= 0) { fchmod(fd, mode | 0600); close(fd); }   /* (root writes any file: so does the app) */
+                if (fd >= 0) { fchmod(fd, mode | 0600); set_mtime(fd, mtime); close(fd); }   /* (root writes any file: so does the app) */
                 count++;
             }
         }
