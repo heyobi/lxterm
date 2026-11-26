@@ -83,7 +83,10 @@ void lx_engine_init(const char *root)
     }
     write_resolv(root);
     aoi_proc_zygote("/usr/bin/dnf-3", "/usr/bin/python3", "/usr/lib/lxzygote/zygote-dnf.py",   /* dnf's fast start */
-                    "/var/lib/rpm/rpmdb.sqlite");                                             /* (Distros.swift installFastStart) */
+                    "/usr/lib/python3.12/site-packages,/usr/lib64/python3.12/site-packages,"     /* (Distros.swift installFastStart; */
+                    "/usr/lib/python3.12/site-packages/dnf,/usr/lib64/python3.12/site-packages/libdnf,"   /* a new snapshot when */
+                    "/usr/lib64/python3.12/site-packages/hawkey,/usr/lib64/python3.12/site-packages/rpm," /* these or what it maps */
+                    "/usr/lib64/python3.12");                                                  /* change) */
 }
 
 void lx_engine_bind_files(const char *host)

@@ -1971,6 +1971,26 @@
           }
         }
       }
+    },
+    "Speed-ups": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hızlandırmalar"
+          }
+        }
+      }
+    },
+    "AlmaLinux's package tools run partly as code translated ahead of time, and dnf continues from a saved start instead of starting Python for every command. If a program behaves unexpectedly, turn this off to compare; it applies the next time LxTerm starts.": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AlmaLinux'un paket araçları kısmen önceden çevrilmiş kodla çalışır; dnf de her komutta Python'u baştan başlatmak yerine kaydedilmiş bir açılıştan devam eder. Bir program beklenmedik davranırsa karşılaştırmak için kapatın; LxTerm bir sonraki açılışında geçerli olur."
+          }
+        }
+      }
     }
   }
 }

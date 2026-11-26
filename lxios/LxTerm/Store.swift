@@ -70,6 +70,9 @@ final class Store: ObservableObject {
         guard FileManager.default.fileExists(atPath: okFile.path) || Distro.debianRemoved else { return false }
         if !engineReady || again {                                 // (again: a fresh root after Reset)
             engineReady = true
+            let fast = UserDefaults.standard.object(forKey: "acceleration") as? Bool ?? true   // Settings › Speed-ups
+            setenv("AOI_AOT", fast ? "1" : "0", 1)                 // (translated libraries, core/aot.c)
+            setenv("AOI_ZYGOTE", fast ? "1" : "0", 1)              // (dnf's fast start, engine.c)
             lx_engine_init(rootDir.path)
             lx_engine_bind_files(SharedFiles.shared.root.path)
             for d in Distro.installed {

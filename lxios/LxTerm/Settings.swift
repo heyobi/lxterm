@@ -101,6 +101,7 @@ struct SettingsView: View {
     @AppStorage("cursorBlink") private var cursorBlink = true
     @AppStorage("distroColours") private var distroColours = true
     @AppStorage("keepAwake") private var keepAwake = true
+    @AppStorage("acceleration") private var acceleration = true
     @State private var size = Settings.fontSize
     @State private var resetting: Distro?
     @ObservedObject private var distros = DistroManager.shared
@@ -148,6 +149,11 @@ struct SettingsView: View {
                     Toggle("Keep screen on while a command runs", isOn: $keepAwake)
                 } footer: {
                     Text("iOS pauses LxTerm when the screen locks, and a long command (an install, a build) stops until you come back. At the prompt the screen locks as usual.")
+                }
+                Section {
+                    Toggle("Speed-ups", isOn: $acceleration)
+                } footer: {
+                    Text("AlmaLinux's package tools run partly as code translated ahead of time, and dnf continues from a saved start instead of starting Python for every command. If a program behaves unexpectedly, turn this off to compare; it applies the next time LxTerm starts.")
                 }
                 Section {
                     Toggle("Accelerated engine (beta)", isOn: $webEngine)
