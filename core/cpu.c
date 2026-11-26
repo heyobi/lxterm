@@ -2,6 +2,7 @@
 #include "cpu_impl.h"
 #include "jit.h"
 #include "hle.h"
+#include "aot.h"
 
 #ifdef AOI_DEBUG
 /* Debug build (make build/aoiproc-debug): AOI_WATCH=value logs every store of that
@@ -192,8 +193,12 @@ enum aoi_stop aoi_cpu_run(struct aoi_cpu *c, uint64_t max_steps)
     void (*const trace)(struct aoi_cpu *, int) = c->trace;
     const uint8_t *cpage = NULL;
     uint64_t cpage_va = 1;                                         /* no page: never matches an aligned pc */
-#ifdef AOI_JIT
+#if defined(AOI_JIT) || defined(AOI_AOT)
     int bs = 1;                                                    /* at a block start: ask the accelerator */
+#endif
+#ifdef AOI_AOT
+    const int aot_on = c->naot != 0;                               /* (no translated library: no block tracking;
+                                                                    * one mapped meanwhile counts from the next call) */
 #endif
     c->stop = AOI_RUN;
     while (c->stop == AOI_RUN) {
@@ -213,6 +218,46 @@ enum aoi_stop aoi_cpu_run(struct aoi_cpu *c, uint64_t max_steps)
             c->pc = c->x[30];
             continue;
         }
+#ifdef AOI_AOT
+        if (bs && aot_on && !trace) {                              /* translated libraries (core/aot.h) */
+            int j, k = 0;
+            for (j = 0; j < c->naot; j++) {
+                k = c->aot_last + j;                               /* (the library hit last first) */
+                if (k >= c->naot) k -= c->naot;
+                if (c->pc - c->aot_lo[k] < c->aot_hi[k] - c->aot_lo[k]) {
+                    const struct aoi_aot_lib *L = c->aot_lib[k];
+                    aoi_aot_fn f = L->pages[(c->pc - c->aot_biases[k] - L->text_lo) >> 12];
+                    int n;
+                    if (!f) break;
+                    c->aot_last = k;
+                    c->aot_bias = c->aot_biases[k];
+                    if (!(n = f(c))) break;
+                    aoi_aot_runs++;
+                    /* chained: while it lands in translated code of the same library (a call, a
+                     * return, the next page), the next page's function runs at once */
+                    while (c->stop == AOI_RUN && c->pc - c->aot_lo[k] < c->aot_hi[k] - c->aot_lo[k] && c->steps + (uint64_t)n < limit
+                           && n < 1000000 && (f = L->pages[(c->pc - c->aot_biases[k] - L->text_lo) >> 12])) {
+                        int m = f(c);
+                        if (!m) break;
+                        n += m;
+                        aoi_aot_runs++;
+                    }
+                    c->steps += (uint64_t)n;
+                    aoi_aot_insns += (uint64_t)n;
+                    k = -1;
+                    break;
+                }
+            }
+            if (k < 0) {
+                cpage_va = 1;
+                if (c->stop != AOI_RUN) break;
+                continue;
+            }
+#ifndef AOI_JIT
+            bs = 0;
+#endif
+        }
+#endif
 #ifdef AOI_JIT
         if (bs && !trace) {
             aoi_jit_fn f = aoi_jit_find(c, c->pc);
@@ -814,8 +859,10 @@ enum aoi_stop aoi_cpu_run(struct aoi_cpu *c, uint64_t max_steps)
             break;
         }
         if (c->stop == AOI_RUN) {
-#ifdef AOI_JIT
+#if defined(AOI_JIT)
             bs = next != c->pc + 4;                                /* a taken branch starts a block */
+#elif defined(AOI_AOT)
+            if (aot_on) bs = next != c->pc + 4;
 #endif
             c->pc = next;
         }

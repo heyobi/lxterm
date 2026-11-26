@@ -30,6 +30,10 @@ targets:
       - path: core
         includes: ["*.c", "*.h"]
         excludes: ["oracle.c"]
+      - path: aot                  # AlmaLinux's dnf libraries translated ahead of time (tools/aot-build.sh, CI; built with AOI_AOT)
+        includes: ["*.c"]
+        optional: true
+        compilerFlags: ["-O1", "-w"]
       - path: rootfs-debian.tar.gz
         buildPhase: resources
         optional: true

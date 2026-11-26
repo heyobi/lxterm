@@ -44,6 +44,29 @@ jobs:
       - uses: actions/upload-artifact@v4
         with: { name: rootfs, path: rootfs-debian.tar.gz, retention-days: 7 }
 
+  aot:                            # AlmaLinux's dnf libraries translated ahead of time, for the image the app downloads now
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 120
+    continue-on-error: true       # (without tables the app is built as before: everything interpreted)
+    steps:
+      - uses: actions/checkout@v4
+      - name: AlmaLinux image
+        id: img
+        run: |
+          sh tests/linux/fetch-image.sh "$RUNNER_TEMP/alma" 10 almalinux | tee fetch.log
+          echo "digest=$(sed -n 's/.* manifest \(sha256:[0-9a-f]*\).*/\1/p' fetch.log | head -n 1)" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache@v4
+        id: cache
+        with:
+          path: aot
+          key: aot-${{ steps.img.outputs.digest }}-${{ hashFiles('tools/aot-build.sh', 'tools/aotgen.c', 'tests/linux/prof_*.py', 'core/aot.h', 'core/cpu.h') }}
+      - if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq bc > /dev/null
+          sudo sh tools/aot-build.sh "$RUNNER_TEMP/alma" aot
+      - uses: actions/upload-artifact@v4
+        with: { name: aot, path: aot, retention-days: 7 }
+
   prepare:
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -65,9 +88,9 @@ jobs:
         run: node scripts/asc.cjs next-build-number "${{ steps.app.outputs.app_id }}" "${{ github.run_number }}"
 
   build:
-    needs: [roots, prepare, web]
+    needs: [roots, prepare, web, aot]
     runs-on: xcode-27
-    timeout-minutes: 45
+    timeout-minutes: 75
     env:
       ASC_KEY_ID: ${{ secrets.APP_STORE_CONNECT_KEY_ID }}
       ASC_ISSUER_ID: ${{ secrets.APP_STORE_CONNECT_ISSUER_ID }}
@@ -81,6 +104,9 @@ jobs:
         with: { name: rootfs }
       - uses: actions/download-artifact@v4
         with: { name: web, path: lxios/web }
+      - uses: actions/download-artifact@v4
+        continue-on-error: true
+        with: { name: aot, path: aot }
       - name: Licenses and Xcode project
         run: |
           mkdir -p licenses && cp LICENSE NOTICE.md licenses/
@@ -130,10 +156,12 @@ jobs:
         run: |
           set -o pipefail
           xcodebuild -version
+          DEFS='$(inherited)'
+          if [ -f aot/aot_table.c ]; then DEFS="$DEFS AOI_AOT=1"; ls -l aot; else echo "no AOT tables: interpreted only"; fi
           xcodebuild archive -project LxTerm.xcodeproj -scheme LxTerm -configuration Release \
             -destination 'generic/platform=iOS' -archivePath build/LxTerm.xcarchive \
             -skipPackagePluginValidation -skipMacroValidation \
-            LX_PROFILE="$PROFILE" LX_FILES_PROFILE="$FPROFILE" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" > archive.log 2>&1 \
+            LX_PROFILE="$PROFILE" LX_FILES_PROFILE="$FPROFILE" CURRENT_PROJECT_VERSION="$BUILD_NUMBER" GCC_PREPROCESSOR_DEFINITIONS="$DEFS" > archive.log 2>&1 \
             || { grep -E "error:" archive.log | head -n 60 || true; tail -n 40 archive.log; exit 1; }
           tail -n 5 archive.log
 
