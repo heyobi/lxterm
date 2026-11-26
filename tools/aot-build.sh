@@ -23,6 +23,7 @@ echo "== training (interpreted, sampled)"
 rm -rf build/prof build/ranges; mkdir -p build/prof
 k=0
 for cmd in 'dnf --version' 'dnf -C search nginx' 'dnf -C list --installed' 'dnf -y makecache' \
+           'dnf clean all; dnf -y makecache' \
            'dnf -C repoquery --requires httpd' 'dnf -C info tmux' 'python3 -c "import hashlib, json; s=0
 for i in range(200000): s+=i*i
 print(hashlib.sha256(json.dumps([s]).encode()).hexdigest())"' 'rpm -qa' \
@@ -34,10 +35,12 @@ echo "== debug symbols (function bounds), natively"
 mount -t proc proc "$R/proc"; mount --rbind /dev "$R/dev"
 chroot "$R" /bin/bash -c "dnf -y -q --enablerepo='*-debuginfo' --setopt=strict=0 install python3-libs-debuginfo libsolv-debuginfo sqlite-libs-debuginfo rpm-libs-debuginfo rpm-sequoia-debuginfo libdnf-debuginfo libxml2-debuginfo glib2-debuginfo openssl-libs-debuginfo zlib-ng-compat-debuginfo bash-debuginfo glibc-debuginfo libcurl-debuginfo > /dev/null 2>&1"
 umount -R "$R/dev" "$R/proc"
-python3 tests/linux/prof_funcs.py "$R" 0.99 build/ranges build/prof/*.prof
+# (glibc's string functions stay with core/lxfast.c, which runs them on the host)
+PROF_EXCLUDE='^_*(mem(cpy|move|set|chr|cmp)|rawmemchr|str(len|nlen|chr|chrnul|rchr|cmp|ncmp|cpy)|stpcpy)(_|$)' \
+    python3 tests/linux/prof_funcs.py "$R" 0.99 build/ranges build/prof/*.prof
 
 echo "== translated"
-LIBS="libsolv:usr/lib64/libsolv.so.1 libpython:usr/lib64/libpython3.12.so.1.0 libsqlite:usr/lib64/libsqlite3.so.0 librpm:usr/lib64/librpm.so.10 librpmio:usr/lib64/librpmio.so.10 libdnf:usr/lib64/libdnf.so.2 libxml2:usr/lib64/libxml2.so.2 libglib:usr/lib64/libglib-2.0.so.0 libcrypto:usr/lib64/libcrypto.so.3 libz:usr/lib64/libz.so.1 librpmseq:usr/lib64/librpm_sequoia.so.1 libsolvext:usr/lib64/libsolvext.so.1 bash:usr/bin/bash ldso:usr/lib/ld-linux-aarch64.so.1 libgcc:usr/lib64/libgcc_s.so.1 libcurl:usr/lib64/libcurl.so.4"
+LIBS="libsolv:usr/lib64/libsolv.so.1 libpython:usr/lib64/libpython3.12.so.1.0 libsqlite:usr/lib64/libsqlite3.so.0 librpm:usr/lib64/librpm.so.10 librpmio:usr/lib64/librpmio.so.10 libdnf:usr/lib64/libdnf.so.2 libxml2:usr/lib64/libxml2.so.2 libglib:usr/lib64/libglib-2.0.so.0 libcrypto:usr/lib64/libcrypto.so.3 libz:usr/lib64/libz.so.1 librpmseq:usr/lib64/librpm_sequoia.so.1 libsolvext:usr/lib64/libsolvext.so.1 bash:usr/bin/bash ldso:usr/lib/ld-linux-aarch64.so.1 libgcc:usr/lib64/libgcc_s.so.1 libcurl:usr/lib64/libcurl.so.4 libc:usr/lib64/libc.so.6"
 rm -rf build/aot; mkdir -p build/aot
 TABLE="#include \"aot.h\"
 "; REFS=""; total=0
@@ -62,7 +65,7 @@ check() {   # check LABEL COMMAND: same output with the tables, and the time
         LXRUN_STATS=1 LXRUN_QUIET=1 timeout 1800 build/$b "$R" /bin/bash -c "$2" > /tmp/out.$b 2> /tmp/err.$b
         echo "$(date +%s.%N) - $t0" | bc > /tmp/t.$b
     done
-    sed -i -e 's/ *[0-9.]* [kM]B\/s.*//' -e '/^Last metadata expiration check/d' /tmp/out.lxrun /tmp/out.lxrun-aot
+    sed -i -e 's/ *[0-9.]* [kMG]\?B\/s.*//' -e '/^Last metadata expiration check/d' /tmp/out.lxrun /tmp/out.lxrun-aot
     if cmp -s /tmp/out.lxrun /tmp/out.lxrun-aot; then same=same; else same=DIFFERENT; bad=1; fi
     a=$(cat /tmp/t.lxrun); b=$(cat /tmp/t.lxrun-aot)
     printf '%-30s interpreted %7.2f s   translated %7.2f s   %4.0f%%   output %s\n' "$1" "$a" "$b" "$(echo "100 * (1 - $b / $a)" | bc -l)" "$same"
@@ -76,5 +79,6 @@ check "dnf -C list --available"   'dnf -C list --available | wc -l'
 check "rpm -qa"                   'rpm -qa'
 check "python3 json + re"         'python3 -c "import json, re; d=[{\"k\": i, \"v\": str(i)*5} for i in range(40000)]; s=json.dumps(d); print(len(s), len(re.findall(r\"[0-9]{5}\", s)), len(json.loads(s)))"'
 check "dnf install tmux"          'dnf -y -C --setopt=install_weak_deps=False install tmux >/dev/null 2>&1; rpm -q tmux; dnf -y -C remove tmux >/dev/null 2>&1; rpm -q tmux'
+check "cold dnf makecache"        'dnf clean all >/dev/null; dnf -y makecache; dnf -C repolist'
 [ $bad = 0 ] || { echo "outputs differ: no tables"; exit 1; }
 rm -rf "$OUT"; mkdir -p "$OUT" && cp build/aot/*.c "$OUT/" && ls -l "$OUT"
