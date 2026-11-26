@@ -63,10 +63,13 @@ static void write_resolv(const char *root)
         res_ndestroy(&rs);
     }
     /* a public server after the phone's own, and short timeouts: glibc waited 5 s on each
-     * server that did not answer (a root kept the file of the network it was written on) */
+     * server that did not answer (a root kept the file of the network it was written on).
+     * single-request-reopen: the A and AAAA questions one after the other, each on its own
+     * socket - sent together (sendmmsg), one answer got lost on some networks (an ISP's
+     * resolver here) and every lookup waited out the timeout: 6.4 s instead of 0.03 */
     if (n < 3) fprintf(f, "nameserver 1.1.1.1\n");
     if (!n) fprintf(f, "nameserver 8.8.8.8\n");
-    fprintf(f, "options timeout:1 attempts:2\n");
+    fprintf(f, "options single-request-reopen timeout:1 attempts:2\n");
     fclose(f);
 }
 
