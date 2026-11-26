@@ -35,8 +35,16 @@ final class Session: NSObject, ObservableObject, Identifiable, TerminalViewDeleg
         self.distro = distro
         self.accelerated = accelerated && distro.builtIn           // (the accelerated engine runs Debian)
         super.init()
-        if !distro.builtIn { title = distro.name.components(separatedBy: " ").first ?? distro.name }
+        title = shortName
     }
+
+    /// The tab's name at the prompt: the distribution's ("Debian", "AlmaLinux").
+    var shortName: String { distro.name.components(separatedBy: " ").first ?? distro.name }
+
+    private static let shells: Set<String> = ["", "bash", "sh", "dash", "ash", "zsh", "fish", "busybox", "login"]
+
+    /// What the tab shows for its foreground program: the distribution's name while it is a shell.
+    func tabTitle(_ program: String) -> String { Session.shells.contains(program) ? shortName : program }
 
     var snapPath: String { Store.sessionsDir.appendingPathComponent("\(id).snap").path }
     var logPath: URL { Store.sessionsDir.appendingPathComponent("\(id).log") }
@@ -241,15 +249,14 @@ final class Session: NSObject, ObservableObject, Identifiable, TerminalViewDeleg
         guard let handle, !exited else { return false }
         var buf = [CChar](repeating: 0, count: 64)
         lx_session_title(handle, &buf, 64)
-        return !["", "bash", "sh", "dash", "ash", "zsh", "fish", "busybox", "login"].contains(String(cString: buf))
+        return !Session.shells.contains(String(cString: buf))
     }
 
     private func updateTitle() {
         guard let handle else { return }
         var buf = [CChar](repeating: 0, count: 64)
         lx_session_title(handle, &buf, 64)
-        var t = String(cString: buf)
-        if !distro.builtIn, t == "bash" || t == "sh" || t == "busybox" { t = distro.name.components(separatedBy: " ").first ?? distro.name }
+        let t = tabTitle(String(cString: buf))
         if t != title { title = t }
     }
 

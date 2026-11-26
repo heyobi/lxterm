@@ -234,7 +234,7 @@ final class WebEngine: NSObject, WKURLSchemeHandler, WKScriptMessageHandler, WKN
         for part in m.split(separator: ";") {
             let f = part.split(separator: " ", maxSplits: 2).map(String.init)
             guard f.count >= 2, let id = Int(f[1]) else { continue }
-            if f[0] == "T", f.count == 3 { sessions[id]?.title = f[2] }
+            if f[0] == "T", f.count == 3, let s = sessions[id] { s.title = s.tabTitle(f[2]) }
             else if f[0] == "E", let s = sessions.removeValue(forKey: id) { keys[id] = nil; s.shellEnded() }
         }
     }
