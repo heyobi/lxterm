@@ -25,6 +25,8 @@ struct Distro: Identifiable, Hashable {
         Distro(id: "arch", name: "Arch Linux ARM", detail: "pacman", repo: "archlinuxarm", tag: "", megabytes: 110),
     ]
 
+    static let repairExplanation = String(localized: "A fresh copy of the system is installed and checked. Your files in /root and /home are kept; packages you installed and changes elsewhere are not. Its tabs are closed.")
+
     static func named(_ id: String?) -> Distro { all.first { $0.id == id } ?? debian }
 
     var builtIn: Bool { repo.isEmpty }
@@ -44,7 +46,13 @@ struct Distro: Identifiable, Hashable {
     func remove() {
         if builtIn { Distro.debianRemoved = true }
         try? FileManager.default.removeItem(at: root)
-        try? FileManager.default.removeItem(at: Distro.dir.appendingPathComponent(".\(id)-new", isDirectory: true))
+        try? FileManager.default.removeItem(at: tmpRoot)
+    }
+
+    /// Where a new copy is put together before it replaces `root` (a half-done download never
+    /// becomes the distribution).
+    private var tmpRoot: URL {
+        (builtIn ? Store.rootDir.deletingLastPathComponent() : Distro.dir).appendingPathComponent(".\(id)-new", isDirectory: true)
     }
 
     /// The distribution a new tab runs (Settings › Default distribution), if it is installed.
@@ -69,7 +77,7 @@ struct Distro: Identifiable, Hashable {
     }
 
     enum Failure: LocalizedError {
-        case http(Int, String), noArm64, digest(String), format(String), unpack(String)
+        case http(Int, String), noArm64, digest(String), format(String), unpack(String), noStart
         var errorDescription: String? {
             switch self {
             case .http(let c, let what): return String(localized: "The download failed (HTTP \(c), \(what)).")
@@ -77,62 +85,82 @@ struct Distro: Identifiable, Hashable {
             case .digest(let what): return String(localized: "The checksum of \(what) does not match: the download was not used.")
             case .format(let t): return String(localized: "Unsupported image format: \(t)")
             case .unpack(let e): return String(localized: "Could not unpack: \(e)")
+            case .noStart: return String(localized: "The new copy's shell did not start, so it was not used.")
             }
         }
     }
 
-    /// Downloads, verifies and unpacks the image into `root`. progress: 0...1.
-    func install(progress: @escaping @Sendable (Double) -> Void) async throws {
+    /// Downloads, verifies and unpacks the image, checks that its shell starts, then puts it
+    /// in place of `root`. keepUserFiles (Repair): /root and /home of the copy it replaces are
+    /// moved into the new one. progress: 0...1.
+    func install(keepUserFiles: Bool = false, progress: @escaping @Sendable (Double) -> Void) async throws {
         let fm = FileManager.default
-        if builtIn {                                               // Debian again, from the app
-            guard let tarball = Bundle.main.path(forResource: "rootfs-debian", ofType: "tar.gz") else { throw Failure.unpack("rootfs-debian.tar.gz") }
-            try? fm.removeItem(at: root)
-            try fm.createDirectory(at: root, withIntermediateDirectories: true)
-            var files: UInt = 0
-            if let err = lx_unpack(tarball, root.path, &files, nil, nil) { throw Failure.unpack(String(cString: err)) }
-            lx_engine_prepare_root(root.path)
-            fm.createFile(atPath: okFile.path, contents: nil)
-            Distro.debianRemoved = false
-            progress(1)
-            return
-        }
-        let tmpRoot = Distro.dir.appendingPathComponent(".\(id)-new", isDirectory: true)
+        let tmpRoot = tmpRoot
         try? fm.removeItem(at: tmpRoot)
         try fm.createDirectory(at: tmpRoot, withIntermediateDirectories: true)
         defer { try? fm.removeItem(at: tmpRoot) }
-        if repo == "archlinuxarm" {                                 // its own repositories (Pacstrap.swift)
+        let image: String
+        if builtIn {                                               // Debian again, from the app
+            guard let tarball = Bundle.main.path(forResource: "rootfs-debian", ofType: "tar.gz") else { throw Failure.unpack("rootfs-debian.tar.gz") }
+            var files: UInt = 0
+            if let err = lx_unpack(tarball, tmpRoot.path, &files, nil, nil) { throw Failure.unpack(String(cString: err)) }
+            image = "debian (included in the app)
+"
+        } else if repo == "archlinuxarm" {                          // its own repositories (Pacstrap.swift)
             try await Pacstrap.install(into: tmpRoot, progress: progress)
-            progress(0.95)
-            try? fm.removeItem(at: root)
-            try fm.moveItem(at: tmpRoot, to: root)
-            lx_engine_prepare_root(root.path)
-            try Data("archlinuxarm (packages from its repositories)\n".utf8).write(to: root.appendingPathComponent(".lxterm-image"))
-            fm.createFile(atPath: okFile.path, contents: nil)
-            progress(1)
-            return
+            image = "archlinuxarm (packages from its repositories)
+"
+        } else {
+            let reg = Registry(repo: repo)
+            try await reg.login()
+            let manifest = try await reg.arm64Manifest(tag: tag)
+            let total = max(1, manifest.layers.reduce(0) { $0 + $1.size })
+            var done: Int64 = 0
+            for layer in manifest.layers {
+                guard layer.mediaType.hasSuffix("gzip") else { throw Failure.format(layer.mediaType) }
+                let base = done
+                let file = try await reg.blob(layer.digest) { got in progress(0.9 * Double(base + got) / Double(total)) }
+                defer { try? fm.removeItem(at: file) }
+                guard try Distro.sha256(file) == layer.digest else { throw Failure.digest(String(layer.digest.prefix(19))) }
+                done += layer.size
+                try Distro.unpack(file, into: tmpRoot)
+                Distro.applyWhiteouts(tmpRoot)
+            }
+            image = "\(repo):\(tag) \(manifest.digest)
+"
         }
-        let reg = Registry(repo: repo)
-        try await reg.login()
-        let manifest = try await reg.arm64Manifest(tag: tag)
-        let total = max(1, manifest.layers.reduce(0) { $0 + $1.size })
-        var done: Int64 = 0
-        for layer in manifest.layers {
-            guard layer.mediaType.hasSuffix("gzip") else { throw Failure.format(layer.mediaType) }
-            let base = done
-            let file = try await reg.blob(layer.digest) { got in progress(0.9 * Double(base + got) / Double(total)) }
-            defer { try? fm.removeItem(at: file) }
-            guard try Distro.sha256(file) == layer.digest else { throw Failure.digest(String(layer.digest.prefix(19))) }
-            done += layer.size
-            try Distro.unpack(file, into: tmpRoot)
-            Distro.applyWhiteouts(tmpRoot)
-        }
+        try Task.checkCancellation()
         progress(0.95)
+        lx_engine_prepare_root(tmpRoot.path)
+        guard await Distro.shellStarts(in: tmpRoot) else { throw Failure.noStart }
+        try Task.checkCancellation()
+        if keepUserFiles { Distro.moveUserFiles(from: root, to: tmpRoot) }
         try? fm.removeItem(at: root)
         try fm.moveItem(at: tmpRoot, to: root)
         lx_engine_prepare_root(root.path)
-        try Data("\(repo):\(tag) \(manifest.digest)\n".utf8).write(to: root.appendingPathComponent(".lxterm-image"))
+        try Data(image.utf8).write(to: root.appendingPathComponent(".lxterm-image"))
         fm.createFile(atPath: okFile.path, contents: nil)
+        if builtIn { Distro.debianRemoved = false }
         progress(1)
+    }
+
+    /// Whether a login shell in `root` starts and runs a command (a copy is only used if so,
+    /// and a tab that cannot start offers Repair).
+    static func shellStarts(in root: URL) async -> Bool {
+        guard let out = try? await Headless.run("echo lxterm-shell-ok", root: root.path, seconds: 90) else { return false }
+        return out.contains("lxterm-shell-ok")
+    }
+
+    /// Repair: the user's own files (/root, with its dotfiles and history, and /home) go
+    /// into the fresh copy.
+    static func moveUserFiles(from old: URL, to new: URL) {
+        let fm = FileManager.default
+        for d in ["root", "home"] {
+            let o = old.appendingPathComponent(d), n = new.appendingPathComponent(d)
+            guard fm.fileExists(atPath: o.path) else { continue }
+            try? fm.removeItem(at: n)
+            try? fm.moveItem(at: o, to: n)
+        }
     }
 
     static func sha256(_ file: URL) throws -> String {
@@ -273,6 +301,7 @@ final class DistroManager: ObservableObject {
     static let shared = DistroManager()
     @Published private(set) var installed: [Distro] = Distro.installed
     @Published private(set) var progress: [String: Double] = [:]
+    @Published private(set) var repairing: Set<String> = []
     @Published var failure: String?
     @Published private(set) var sizes: [String: Int64] = [:]
 
@@ -283,16 +312,18 @@ final class DistroManager: ObservableObject {
         tasks[d.id]?.cancel()
         tasks[d.id] = nil
         progress[d.id] = nil
+        repairing.remove(d.id)
         if !d.installed { d.remove(); if d.builtIn { Distro.debianRemoved = true } }
         refresh()
     }
 
-    func download(_ d: Distro) {
+    func download(_ d: Distro, keepUserFiles: Bool = false) {
         guard progress[d.id] == nil else { return }
         progress[d.id] = 0
+        if keepUserFiles { repairing.insert(d.id) }
         tasks[d.id] = Task.detached(priority: .userInitiated) {
             do {
-                try await d.install { f in Task { @MainActor in if DistroManager.shared.progress[d.id] != nil { DistroManager.shared.progress[d.id] = f } } }
+                try await d.install(keepUserFiles: keepUserFiles) { f in Task { @MainActor in if DistroManager.shared.progress[d.id] != nil { DistroManager.shared.progress[d.id] = f } } }
                 await MainActor.run { DistroManager.shared.finished(d, nil) }
             } catch {
                 await MainActor.run { DistroManager.shared.finished(d, error) }
@@ -304,6 +335,7 @@ final class DistroManager: ObservableObject {
         let cancelled = tasks[d.id] == nil || e is CancellationError || (e as? URLError)?.code == .cancelled
         tasks[d.id] = nil
         progress[d.id] = nil
+        repairing.remove(d.id)
         if let e, !cancelled { failure = "\(d.name): \(e.localizedDescription)" }
         refresh()
         Store.shared?.distributionsChanged()                      // (the first one installed becomes the default)

@@ -73,7 +73,7 @@ jobs:
           ls -la shots
           echo "== distributions and ports"
           xcrun simctl terminate "$UDID" com.heyobi.lxterm || true
-          xcrun simctl launch "$UDID" com.heyobi.lxterm -distros; sleep 720
+          xcrun simctl launch "$UDID" com.heyobi.lxterm -distros; sleep 840
           xcrun simctl io "$UDID" screenshot shots/2b-distros.png
           cat "$C/Documents/distros.log" || true
           for d in debian ubuntu alpine fedora almalinux arch; do echo "-- $d"; sed 's/\x1b\[[0-9;?]*[a-zA-Z]//g' "$C/Documents/distro-$d.log" | tail -n 25 || true; done

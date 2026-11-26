@@ -202,6 +202,17 @@ final class Store: ObservableObject {
         unpack()
     }
 
+    /// Repair: its tabs close (without a new one in it meanwhile) and a fresh copy is
+    /// installed that keeps /root and /home; with no tab left, one opens when it is done.
+    func repair(_ d: Distro) {
+        for s in sessions where s.distro == d { s.close() }
+        sessions.removeAll { $0.distro == d }
+        selected = max(0, min(selected, sessions.count - 1))
+        persist()
+        if d.builtIn { WebEngine.resetRoot() }                     // (the accelerated engine's saved copy)
+        DistroManager.shared.download(d, keepUserFiles: true)
+    }
+
     /// The default distribution is always an installed one while any is: the first installed
     /// when the chosen one was removed (or none was chosen).
     func fixDefault() {

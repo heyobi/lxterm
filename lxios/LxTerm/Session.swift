@@ -152,7 +152,9 @@ final class Session: NSObject, ObservableObject, Identifiable, TerminalViewDeleg
         if handle == nil {                                         // (no blank tab: say why)
             let root = distro.root.path
             let sh = FileManager.default.fileExists(atPath: root + "/bin/bash") ? "/bin/bash" : "/bin/sh"
-            notice(String(localized: "The shell could not be started (\(sh) in \(distro.name)). Reset the distribution in Settings › Distributions."))
+            notice(String(localized: "The shell could not be started (\(sh) in \(distro.name)). Repair keeps your files in /root and /home: Settings › Distributions."))
+            let d = distro
+            DispatchQueue.main.async { NotificationCenter.default.post(name: .lxCannotStart, object: d.id) }
         }
         if let size, let handle { lx_session_resize(handle, Int32(size.cols), Int32(size.rows)) }
         if ProcessInfo.processInfo.arguments.contains("-demo"), !resumed { demo() }
@@ -333,4 +335,6 @@ final class Session: NSObject, ObservableObject, Identifiable, TerminalViewDeleg
 
 extension Notification.Name {
     static let lxFontChanged = Notification.Name("lxFontChanged")
+    /// A tab's shell could not be started (object: the distribution's id): Repair is offered.
+    static let lxCannotStart = Notification.Name("lxCannotStart")
 }

@@ -60,6 +60,7 @@ struct FailedView: View {
 /// like a laptop the terminal stays above the fold; open like a book two shells sit side
 /// by side, one on each half.
 struct MainView: View {
+    @State private var cannotStart: Distro?
     @EnvironmentObject var store: Store
     @State private var showSettings = false
     @State private var themeTick = 0
@@ -150,6 +151,13 @@ struct MainView: View {
             default: showDistros = false; showPorts = false; showSnippets = false; showSettings = false; browser = nil
             }
         }
+        .onReceive(NotificationCenter.default.publisher(for: .lxCannotStart)) { n in
+            if let id = n.object as? String, !DistroManager.shared.repairing.contains(id) { cannotStart = Distro.named(id) }
+        }
+        .alert(Text("\(cannotStart?.name ?? "") could not start"), isPresented: Binding(get: { cannotStart != nil }, set: { if !$0 { cannotStart = nil } })) {
+            Button("Repair") { if let d = cannotStart { store.repair(d) } }
+            Button("Not Now", role: .cancel) {}
+        } message: { Text(Distro.repairExplanation) }
         .onReceive(NotificationCenter.default.publisher(for: .lxFontChanged)) { _ in
             for s in store.sessions { s.applySettings() }
             themeTick += 1

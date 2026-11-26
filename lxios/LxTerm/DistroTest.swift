@@ -60,6 +60,19 @@ enum DistroTest {
                         let link = (try? FileManager.default.destinationOfSymbolicLink(atPath: r + "/" + f)) ?? ""
                         log("alma \(f): \(a[.type] as? String ?? "missing") \(a[.size] as? Int ?? -1) \(link)")
                     }
+                    // Repair: a copy whose loader is gone must not start; Repair must bring it back
+                    // with the user's files in /root kept.
+                    store.close(s)
+                    try? Data("kept
+".utf8).write(to: d.root.appendingPathComponent("root/keep.txt"))
+                    try? FileManager.default.removeItem(atPath: r + "/usr/lib/ld-linux-aarch64.so.1")
+                    let broken = await Distro.shellStarts(in: d.root)
+                    let t1 = Date()
+                    do { try await d.install(keepUserFiles: true) { _ in } } catch { log("alma repair: FAILED \(error.localizedDescription)") }
+                    let fixed = await Distro.shellStarts(in: d.root)
+                    let kept = (try? String(contentsOf: d.root.appendingPathComponent("root/keep.txt"), encoding: .utf8)) == "kept
+"
+                    log("alma repair: broken copy starts=\(broken), repaired starts=\(fixed), /root kept=\(kept), \(Int(Date().timeIntervalSince(t1))) s")
                 } else if d.id == "fedora" {
                     type(s, "head -n 2 /etc/os-release; echo shell=$0; rpm -q bash; dnf --version | head -n 1\r")
                     try? await Task.sleep(for: .seconds(30))

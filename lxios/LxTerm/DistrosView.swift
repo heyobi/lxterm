@@ -7,6 +7,7 @@ struct DistrosView: View {
     @Environment(\.dismiss) private var dismiss
     @State private var confirmRemove: Distro?
     @State private var confirmReset: Distro?
+    @State private var confirmRepair: Distro?
 
     var body: some View {
         List {
@@ -42,6 +43,9 @@ struct DistrosView: View {
                 }
             }
         } message: { Text("Everything installed or changed in it is deleted and a fresh copy is downloaded. Its tabs are closed.") }
+        .confirmationDialog(Text("Repair \(confirmRepair?.name ?? "")?"), isPresented: Binding(get: { confirmRepair != nil }, set: { if !$0 { confirmRepair = nil } }), titleVisibility: .visible) {
+            Button("Repair") { if let d = confirmRepair { store.repair(d) } }
+        } message: { Text(Distro.repairExplanation) }
     }
 
     @ViewBuilder private func row(_ d: Distro) -> some View {
@@ -52,6 +56,7 @@ struct DistrosView: View {
                 Text(d.name)
                 Group {
                     if d.builtIn { Text("\(d.detail) · included") }
+                    else if m.repairing.contains(d.id) { Text("\(d.detail) · repairing…") }
                     else if m.progress[d.id] != nil { Text("\(d.detail) · downloading…") }
                     else if installed, let s = m.sizes[d.id] { Text("\(d.detail) · \(ByteCountFormatter.string(fromByteCount: s, countStyle: .file))") }
                     else { Text("\(d.detail) · about \(d.megabytes) MB download") }
@@ -74,11 +79,13 @@ struct DistrosView: View {
             if installed {
                 Button("Remove", role: .destructive) { confirmRemove = d }
                 Button("Reset") { confirmReset = d }.tint(.orange)
+                Button("Repair") { confirmRepair = d }.tint(.blue)
             }
         }
         .contextMenu {
             if installed {
                 if store.defaultDistro != d.id { Button("Make Default", systemImage: "star") { store.defaultDistro = d.id } }
+                Button("Repair…", systemImage: "wrench.and.screwdriver") { confirmRepair = d }
                 Button("Reset…", systemImage: "arrow.counterclockwise") { confirmReset = d }
                 Button("Remove", systemImage: "trash", role: .destructive) { confirmRemove = d }
             }

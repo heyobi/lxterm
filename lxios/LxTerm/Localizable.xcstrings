@@ -1442,16 +1442,6 @@
         }
       }
     },
-    "The shell could not be started (%@ in %@). Reset the distribution in Settings › Distributions.": {
-      "localizations": {
-        "tr": {
-          "stringUnit": {
-            "state": "translated",
-            "value": "Kabuk başlatılamadı (%2$@ içinde %1$@). Dağıtımı Ayarlar › Dağıtımlar'dan sıfırlayın."
-          }
-        }
-      }
-    },
     "Input": {
       "localizations": {
         "tr": {
@@ -1858,6 +1848,106 @@
           "stringUnit": {
             "state": "translated",
             "value": "Bu cihazdaki Linux'ta çalışan hazır araçlar: bulunduğun yerde hava, bir sitenin ayakta olup olmadığı, ağın, döviz kurları, güçlü şifre, kelime tanımı, Hacker News."
+          }
+        }
+      }
+    },
+    "The shell could not be started (%@ in %@). Repair keeps your files in /root and /home: Settings › Distributions.": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kabuk başlatılamadı (%2$@ içinde %1$@). Onarım /root ve /home içindeki dosyalarınızı korur: Ayarlar › Dağıtımlar."
+          }
+        }
+      }
+    },
+    "Repair": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Onar"
+          }
+        }
+      }
+    },
+    "Repair…": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Onar…"
+          }
+        }
+      }
+    },
+    "Repair %@?": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ onarılsın mı?"
+          }
+        }
+      }
+    },
+    "Repair (keep /root and /home)": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Onar (/root ve /home korunur)"
+          }
+        }
+      }
+    },
+    "%@ could not start": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ başlatılamadı"
+          }
+        }
+      }
+    },
+    "Not Now": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Şimdi Değil"
+          }
+        }
+      }
+    },
+    "%@ · repairing…": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ · onarılıyor…"
+          }
+        }
+      }
+    },
+    "A fresh copy of the system is installed and checked. Your files in /root and /home are kept; packages you installed and changes elsewhere are not. Its tabs are closed.": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sistemin temiz bir kopyası kurulur ve denetlenir. /root ve /home içindeki dosyalarınız korunur; kurduğunuz paketler ve başka yerlerdeki değişiklikler korunmaz. Sekmeleri kapatılır."
+          }
+        }
+      }
+    },
+    "The new copy's shell did not start, so it was not used.": {
+      "localizations": {
+        "tr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Yeni kopyanın kabuğu başlamadı, bu yüzden kullanılmadı."
           }
         }
       }

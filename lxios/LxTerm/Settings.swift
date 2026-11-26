@@ -183,6 +183,10 @@ struct SettingsView: View {
             .onChange(of: cursorBlink) { _, _ in NotificationCenter.default.post(name: .lxFontChanged, object: nil) }
             .onChange(of: distroColours) { _, _ in NotificationCenter.default.post(name: .lxFontChanged, object: nil) }
             .confirmationDialog(Text("Reset \(resetting?.name ?? "")?"), isPresented: Binding(get: { resetting != nil }, set: { if !$0 { resetting = nil } }), titleVisibility: .visible) {
+                Button("Repair (keep /root and /home)") {
+                    guard let d = resetting else { return }
+                    store.repair(d)
+                }
                 Button("Erase and start fresh", role: .destructive) {
                     guard let d = resetting else { return }
                     if d.builtIn { dismiss(); store.reset() }
