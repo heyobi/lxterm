@@ -74,6 +74,6 @@ if [ "${2:-}" = net ]; then
         cat "$T"/tmux-*.trace | grep -E "stopped|not impl|exec|\[unix\]|\[tty\]|= -(22|38|95|9|14)$" | head -n 40 | sed 's/^/     e /'
     fi
     check "ssh to github"          "Permission denied (publickey)" 90 /bin/sh -c 'ssh -o BatchMode=yes -o StrictHostKeyChecking=accept-new -T git@github.com 2>&1; true'
-    check "git clone (https)"      "README"                300 /bin/sh -c 'cd /tmp && git clone -q --depth 1 https://github.com/heyobi/lxterm.git && ls lxterm' 
+    check "git clone (https)"      "README"                300 /bin/sh -c 'cd /tmp && git clone -q --depth 1 https://github.com/pocketdistro/pocketdistro.git && ls pocketdistro' 
 fi
 exit $fail

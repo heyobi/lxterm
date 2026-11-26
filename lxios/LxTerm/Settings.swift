@@ -176,9 +176,9 @@ struct SettingsView: View {
                     Link(destination: URL(string: "https://apps.apple.com/developer/id6820301575")!) {
                         Label("Enjoying Pocket Distro? See my other apps", systemImage: "app.badge.checkmark")
                     }
-                    Link("Source code (GPL-3.0)", destination: URL(string: "https://github.com/heyobi/lxterm")!)
+                    Link("Source code (GPL-3.0)", destination: URL(string: "https://github.com/pocketdistro/pocketdistro")!)
                     NavigationLink("Package sources") { PackageSourcesView() }
-                    Link("Privacy", destination: URL(string: "https://github.com/heyobi/lxterm/blob/main/PRIVACY.md")!)
+                    Link("Privacy", destination: URL(string: "https://github.com/pocketdistro/pocketdistro/blob/main/PRIVACY.md")!)
                     NavigationLink("Licenses") { LicensesView() }
                 }
             }
