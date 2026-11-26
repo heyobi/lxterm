@@ -27,26 +27,27 @@ check "install httpd nginx mariadb-server" "Complete" 3000 \
 sed -i 's/^Listen 80$/Listen 8080/' "$R/etc/httpd/conf/httpd.conf"
 sed -i 's/listen       80;/listen       8081;/; s/listen       \[::\]:80;/listen       [::]:8081;/' "$R/etc/nginx/nginx.conf"
 
-check "httpd: start, status, serve, journal, stop" "inactive" 300 '
+check "httpd: start, status, serve, journal, stop" "httpd served" 300 '
     systemctl start httpd && echo started
     systemctl is-active httpd
     systemctl status httpd --no-pager | head -n 6
-    curl -s -o /dev/null -w "httpd http %{http_code}\n" http://127.0.0.1:8080/
-    journalctl -u httpd -n 3
+    code=$(curl -s --max-time 15 -o /dev/null -w "%{http_code}" http://127.0.0.1:8080/); [ "$code" != 000 ] && echo "httpd served $code"
+    journalctl -u httpd -n 5
     systemctl stop httpd; sleep 1
     systemctl is-active httpd'
-check "nginx (Type=forking, PIDFile, ExecStartPre): start, serve, reload, stop" "nginx http" 300 '
+check "nginx (Type=forking, PIDFile, ExecStartPre): start, serve, reload, stop" "nginx served" 300 '
     systemctl start nginx && echo started
     systemctl status nginx --no-pager | head -n 5
-    curl -s -o /dev/null -w "nginx http %{http_code}\n" http://127.0.0.1:8081/
-    systemctl reload nginx && echo reloaded
-    systemctl stop nginx; systemctl is-active nginx'
+    code=$(curl -s --max-time 15 -o /dev/null -w "%{http_code}" http://127.0.0.1:8081/); [ "$code" != 000 ] && echo "nginx served $code"
+    [ "$code" = 000 ] && { echo "== nginx error.log"; tail -n 20 /var/log/nginx/error.log; journalctl -u nginx -n 20; }
+    timeout 20 systemctl reload nginx && echo reloaded
+    timeout 30 systemctl stop nginx; systemctl is-active nginx'
 check "mariadb (User=mysql, %n, ExecStartPre scripts): start, query, stop" "lxterm-sql-ok" 900 '
     systemctl start mariadb && echo started || journalctl -u mariadb -n 30
     systemctl is-active mariadb
-    mariadb -e "select concat(\"lxterm-sql-\", \"ok\")" 2>&1
-    systemctl stop mariadb; systemctl is-active mariadb'
-check "enable: started again when a tab opens" "active" 300 '
+    timeout 60 mariadb -e "select concat(\"lxterm-sql-\", \"ok\")" 2>&1
+    timeout 60 systemctl stop mariadb; systemctl is-active mariadb'
+check "enable: started again when a tab opens" "after login 403" 300 '
     systemctl enable httpd
     systemctl is-enabled httpd
     bash -lc "sleep 3; systemctl is-active httpd; curl -s -o /dev/null -w \"after login %{http_code}\n\" http://127.0.0.1:8080/"

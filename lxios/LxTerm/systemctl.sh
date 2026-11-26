@@ -12,7 +12,7 @@
 # /usr/bin); this one is /usr/local/bin/systemctl, found first in a tab's PATH.
 #
 # Not done: sockets, timers, targets, dependencies between units (After=, Requires=),
-# cgroups, restarts on failure. User= runs the service as that user (runuser or su).
+# cgroups, restarts on failure. User= runs the service as that user (exec_as).
 # Installed and updated by LxTerm; changes here are overwritten.
 LXV=1
 ST=/run/lxterm/units
@@ -102,23 +102,40 @@ dirs() {   # RuntimeDirectory= and friends: made before the service starts
 # run_cmd LINE [bg]: one Exec line ("-" in front: its failure does not count); bg starts
 # it in its own session in the background and prints its PID.
 run_cmd() {
-    line=$(spec "$1") ign=0
+    line=$(spec "$1") ign=0 as=$RUNAS
     while :; do
-        case $line in -*) ign=1; line=${line#-} ;; [@+!:]*) line=${line#?} ;; *) break ;; esac
+        case $line in -*) ign=1; line=${line#-} ;; [+!]*) as=""; line=${line#?} ;; [@:]*) line=${line#?} ;; *) break ;; esac
     done
-    if [ -n "$RUNAS" ]; then                                       # User=: as that user (runuser, else su)
-        if command -v runuser >/dev/null 2>&1; then line="runuser -u $RUNAS -- sh -c 'exec $line'"
-        else line="su -s /bin/sh $RUNAS -c 'exec $line'"; fi
-    fi
     if [ "${2:-}" = bg ]; then
-        ( cd "${WD:-/}" 2>/dev/null; exec setsid sh -c "exec $line" >> "$LOG" 2>&1 < /dev/null ) &
+        ( exec setsid "$SELF" --lxterm-exec "$as" "${WD:-/}" "$line" >> "$LOG" 2>&1 < /dev/null ) &
         printf '%s' "$!"
         return 0
     fi
-    ( cd "${WD:-/}" 2>/dev/null; eval "$line" ) >> "$LOG" 2>&1 < /dev/null
+    ( exec "$SELF" --lxterm-exec "$as" "${WD:-/}" "$line" ) >> "$LOG" 2>&1 < /dev/null
     rc=$?
     [ $ign = 1 ] && return 0
     return $rc
+}
+
+# exec_as USER DIR LINE: runs LINE (a unit's command line, shell-quoted as systemd reads
+# it) in DIR as USER (empty: root) - runuser or setpriv where util-linux has them, else
+# Python (dnf's), else su; the core keeps the credentials as Linux would.
+exec_as() {
+    cd "$2" 2>/dev/null || cd /
+    [ -z "$1" ] && exec sh -c "exec $3"
+    if command -v runuser >/dev/null 2>&1; then exec runuser -u "$1" -- sh -c "exec $3"; fi
+    if command -v setpriv >/dev/null 2>&1; then exec setpriv --reuid="$1" --regid="$(id -g "$1")" --init-groups sh -c "exec $3"; fi
+    for py in python3 /usr/libexec/platform-python; do
+        command -v "$py" >/dev/null 2>&1 || continue
+        exec "$py" -c 'import os, pwd, sys
+u = pwd.getpwnam(sys.argv[1])
+os.setgroups([]); os.setgid(u.pw_gid); os.setuid(u.pw_uid)
+os.environ.update(HOME=u.pw_dir, USER=u.pw_name, LOGNAME=u.pw_name)
+os.execvp("sh", ["sh", "-c", "exec " + sys.argv[2]])' "$1" "$3"
+    done
+    if command -v su >/dev/null 2>&1; then exec su -s /bin/sh "$1" -c "exec $3"; fi
+    echo "LxTerm: no way to run as $1 here (install util-linux); running as root" >&2
+    exec sh -c "exec $3"
 }
 
 setup() {   # setup NAME: UNIT, F, LOG, WD, TYPE... for one unit; 1 if there is no such unit
@@ -301,6 +318,9 @@ journal() {   # journalctl [-u UNIT]... [-f] [-n N] [--no-pager] [-e] [-b]
     if [ -n "$n" ]; then tail -q -n "$n" $files 2>/dev/null; else cat $files 2>/dev/null; fi
 }
 
+SELF=$0
+case $SELF in /*) ;; *) SELF=$(command -v "$0" 2>/dev/null || echo /usr/local/bin/systemctl) ;; esac
+[ "${1:-}" = --lxterm-exec ] && { exec_as "$2" "$3" "$4"; exit 127; }
 me=$(basename "$0")
 if [ "$me" = journalctl ]; then journal "$@"; exit $?; fi
 
