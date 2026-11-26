@@ -62,7 +62,11 @@ static void write_resolv(const char *root)
         }
         res_ndestroy(&rs);
     }
-    if (!n) fprintf(f, "nameserver 1.1.1.1\nnameserver 8.8.8.8\n");
+    /* a public server after the phone's own, and short timeouts: glibc waited 5 s on each
+     * server that did not answer (a root kept the file of the network it was written on) */
+    if (n < 3) fprintf(f, "nameserver 1.1.1.1\n");
+    if (!n) fprintf(f, "nameserver 8.8.8.8\n");
+    fprintf(f, "options timeout:1 attempts:2\n");
     fclose(f);
 }
 

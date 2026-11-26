@@ -75,6 +75,7 @@ final class Store: ObservableObject {
             for d in Distro.installed {
                 Distro.installServiceTools(d.root)                 // (new in this version of LxTerm, or changed)
                 Distro.forgetServices(d.root)
+                lx_engine_prepare_root(d.root.path)                // (resolv.conf: this network's DNS servers)
             }
         }
         return true

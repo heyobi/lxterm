@@ -140,6 +140,7 @@ final class Session: NSObject, ObservableObject, Identifiable, TerminalViewDeleg
         if FileManager.default.fileExists(atPath: snapPath), let log = try? Data(contentsOf: logPath) {
             history = [UInt8](log.suffix(Session.historyMax))
         }
+        lx_engine_prepare_root(distro.root.path)                  // (the DNS servers of the network the phone is on now)
         handle = lx_session_start(distro.builtIn ? nil : distro.root.path, snapPath, cols, rows, { ctx, s, n in
             guard let ctx, let s else { return }
             Unmanaged<Session>.fromOpaque(ctx).takeUnretainedValue().output(UnsafeRawPointer(s), n)
