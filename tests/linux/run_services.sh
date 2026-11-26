@@ -52,7 +52,7 @@ check "mariadb (User=mysql, %n, ExecStartPre scripts): start, query, stop" "lxte
 check "enable: started again when a tab opens" "after login 403" 300 '
     systemctl enable httpd
     systemctl is-enabled httpd
-    bash -lc "sleep 3; systemctl is-active httpd; curl -s -o /dev/null -w \"after login %{http_code}\n\" http://127.0.0.1:8080/"
+    bash -lc "for i in \$(seq 60); do systemctl is-active -q httpd && break; sleep 1; done; sleep 2; systemctl is-active httpd; curl -s --max-time 15 -o /dev/null -w \"after login %{http_code}\n\" http://127.0.0.1:8080/"
     systemctl disable --now httpd >/dev/null'
 check "systemctl help and unknown units" "not found" 60 'systemctl --version; systemctl start nosuchthing; true'
 exit $fail
