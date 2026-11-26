@@ -175,6 +175,22 @@ struct Distro: Identifiable, Hashable {
             + "[ -d /etc/lxterm/autostart ] && [ -x /usr/local/bin/systemctl ] && (/usr/local/bin/systemctl --lxterm-autostart >/dev/null 2>&1 &)\n"
         if (try? String(contentsOf: hook, encoding: .utf8)) != text { try? Data(text.utf8).write(to: hook) }
         nameInHosts(root)
+        installFastStart(root)
+    }
+
+    /// dnf's fast start: the core runs /usr/bin/dnf-3 through this script, which a saved process
+    /// resumes after dnf's imports (engine.c, lx_engine_init; snapshots in /var/cache/lxzygote).
+    static func installFastStart(_ root: URL) {
+        let fm = FileManager.default
+        guard fm.fileExists(atPath: root.appendingPathComponent("usr/bin/dnf-3").path),
+              let src = Bundle.main.url(forResource: "zygote-dnf", withExtension: "py"), let data = try? Data(contentsOf: src) else { return }
+        let dir = root.appendingPathComponent("usr/lib/lxzygote", isDirectory: true)
+        try? fm.createDirectory(at: dir, withIntermediateDirectories: true)
+        let script = dir.appendingPathComponent("zygote-dnf.py")
+        if (try? Data(contentsOf: script)) != data {
+            try? fm.removeItem(at: script)
+            fm.createFile(atPath: script.path, contents: data, attributes: [.posixPermissions: 0o644])
+        }
     }
 
     /// Every tab's machine is called "iphone" (the core's uname): /etc/hosts gets it as

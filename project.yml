@@ -24,8 +24,10 @@ targets:
     platform: iOS
     sources:
       - path: lxios/LxTerm
-        excludes: ["systemctl.sh"]
+        excludes: ["systemctl.sh", "zygote-dnf.py"]
       - path: lxios/LxTerm/systemctl.sh   # put into each distribution's /usr/local/bin (Distros.swift)
+        buildPhase: resources
+      - path: lxios/LxTerm/zygote-dnf.py  # dnf's fast start, into /usr/lib/lxzygote (Distros.swift, engine.c)
         buildPhase: resources
       - path: core
         includes: ["*.c", "*.h"]

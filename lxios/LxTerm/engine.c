@@ -82,6 +82,8 @@ void lx_engine_init(const char *root)
         setrlimit(RLIMIT_NOFILE, &rl);
     }
     write_resolv(root);
+    aoi_proc_zygote("/usr/bin/dnf-3", "/usr/bin/python3", "/usr/lib/lxzygote/zygote-dnf.py",   /* dnf's fast start */
+                    "/var/lib/rpm/rpmdb.sqlite");                                             /* (Distros.swift installFastStart) */
 }
 
 void lx_engine_bind_files(const char *host)
