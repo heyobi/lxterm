@@ -79,6 +79,7 @@ targets:
       path: lxios/LxTerm/Info.plist
       properties:
         CFBundleDisplayName: "Pocket Distro"
+        CFBundleName: "Pocket Distro"         # (Shortcuts' "… shortcuts" button reads this, not the display name)
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
         CFBundleDevelopmentRegion: en
