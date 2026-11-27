@@ -75,12 +75,8 @@ static void write_resolv(const char *root)
 
 void lx_engine_init(const char *root)
 {
-    struct rlimit rl;
     snprintf(g_root, sizeof g_root, "%s", root);
-    if (!getrlimit(RLIMIT_NOFILE, &rl) && rl.rlim_cur < 4096) {   /* every process dups its fds */
-        rl.rlim_cur = rl.rlim_max < 4096 ? rl.rlim_max : 4096;
-        setrlimit(RLIMIT_NOFILE, &rl);
-    }
+    aoi_proc_raise_nofile();                                      /* every guest process's fds are this app's */
     write_resolv(root);
     aoi_proc_zygote("/usr/bin/dnf-3", "/usr/bin/python3", "/usr/lib/lxzygote/zygote-dnf.py",   /* dnf's fast start */
                     "/usr/lib/python3.12/site-packages,/usr/lib64/python3.12/site-packages,"     /* (Distros.swift installFastStart; */
@@ -110,7 +106,7 @@ void lx_engine_prepare_root(const char *root)
 int lx_engine_listening(int *ports, char *names, int max)
 {
     struct rlimit rl;
-    int fd, n = 0, top = 4096, i;
+    int fd, n = 0, top = 16384, i;                                /* (Ports: the listening sockets among them) */
     if (!getrlimit(RLIMIT_NOFILE, &rl) && rl.rlim_cur < (rlim_t)top) top = (int)rl.rlim_cur;
     for (fd = 0; fd < top && n < max; fd++) {
         int acc = 0, type = 0;

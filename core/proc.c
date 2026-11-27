@@ -34,6 +34,7 @@
 #include <poll.h>
 #include <signal.h>
 #include <sys/ioctl.h>
+#include <sys/resource.h>
 #include <sys/socket.h>
 #include <sys/stat.h>
 #include <sys/statvfs.h>
@@ -784,7 +785,7 @@ void aoi_proc_free(struct aoi_proc *p)
     shm_sync(p, 0, ~0ULL >> 1, 1);                                 /* shared file mappings reach their files */
     for (i = 3; i < AOI_PROC_FDS; i++)
         if (p->fd[i].used) {
-            if (p->fd[i].dir) closedir(p->fd[i].dir); else close(p->fd[i].host);
+            if (p->fd[i].dir) closedir(p->fd[i].dir); close(p->fd[i].host);
         }
     aoi_vm_free(&p->vm);
 }
@@ -2077,9 +2078,9 @@ static uint64_t sys_getdents64(struct aoi_proc *p, struct aoi_proc_fd *f, uint64
 {
     uint64_t used = 0;
     struct dirent *de;
-    if (!f->dir) {
+    if (!f->dir) {                                                 /* (on a dup: closing the fd closes both) */
         int d = dup(f->host);
-        if (d < 0 || !(f->dir = fdopendir(d))) return herr();
+        if (d < 0 || !(f->dir = fdopendir(d))) { if (d >= 0) close(d); return herr(); }
     }
     for (;;) {
         long pos = telldir(f->dir);
@@ -2764,7 +2765,7 @@ static void vfork_end(struct aoi_proc *p, struct aoi_cpu *c, uint64_t ret)
     for (i = 0; i < AOI_PROC_FDS; i++) {
         struct aoi_proc_fd *f = &p->fd[i];
         if (!f->used) continue;
-        if (f->dir) closedir(f->dir); else close(f->host);
+        if (f->dir) closedir(f->dir); close(f->host);
         if (f->kind == AOI_FD_EPOLL) epoll_unref(f->ep);
         if (f->kind == AOI_FD_EVENTFD) ev_ref(p, f, -1);
         free(f->req);
@@ -2918,6 +2919,20 @@ int aoi_proc_turn_others(void)
 /* ---------- fast start ("zygote", aoi_proc_zygote) ---------- */
 
 static struct { int on; char exe[AOI_PATH], interp[AOI_PATH], script[AOI_PATH], watch[4 * AOI_PATH]; } zyg;
+
+void aoi_proc_raise_nofile(void)
+{
+    static const rlim_t want[] = { 65536, 32768, 16384, 10240, 8192, 4096 };   /* (Darwin: up to OPEN_MAX, 10240) */
+    struct rlimit rl;
+    size_t i;
+    if (getrlimit(RLIMIT_NOFILE, &rl)) return;
+    for (i = 0; i < sizeof want / sizeof want[0]; i++) {
+        struct rlimit n = rl;
+        if (rl.rlim_cur >= want[i]) return;
+        n.rlim_cur = rl.rlim_max != RLIM_INFINITY && rl.rlim_max < want[i] ? rl.rlim_max : want[i];
+        if (!setrlimit(RLIMIT_NOFILE, &n)) return;
+    }
+}
 
 void aoi_proc_zygote(const char *exe, const char *interp, const char *script, const char *watch)
 {
@@ -3478,15 +3493,16 @@ static void rmtree(const char *dir)
 static const char *const lx_pid_files[] = { "stat", "status", "cmdline", "comm", "environ", "statm", "maps",
                                             "io", "limits", "oom_score_adj", "cgroup", "mountinfo", "mounts", NULL };
 
+/* (0755: this is the app's own temp tree, filled by this non-root process; 0555 left it empty on iOS) */
 static void lx_piddir(const char *base, const char *name)
 {
     char d[AOI_PATH], sub[AOI_PATH];
     int i;
     snprintf(d, sizeof d, "%s/%s", base, name);
-    if (mkdir(d, 0555) && errno != EEXIST) return;
+    if (mkdir(d, 0755) && errno != EEXIST) return;
     for (i = 0; lx_pid_files[i]; i++) touchf(d, lx_pid_files[i]);
-    snprintf(sub, sizeof sub, "%s/task", d); mkdir(sub, 0555);
-    snprintf(sub, sizeof sub, "%s/fd", d); mkdir(sub, 0555);
+    snprintf(sub, sizeof sub, "%s/task", d); mkdir(sub, 0755);
+    snprintf(sub, sizeof sub, "%s/fd", d); mkdir(sub, 0755);
 }
 
 /* Brings the host tree up to date with the live processes (at most every 0.3 s). */
@@ -3508,10 +3524,10 @@ static void lx_proc_refresh(void)
         for (i = 0; top[i]; i++) touchf(lx_procdir, top[i]);
         lx_piddir(lx_procdir, "self");
         lx_piddir(lx_procdir, "thread-self");
-        snprintf(sub, sizeof sub, "%s/sys", lx_procdir); mkdir(sub, 0555);
-        snprintf(sub, sizeof sub, "%s/sys/kernel", lx_procdir); mkdir(sub, 0555);
-        snprintf(sub, sizeof sub, "%s/sys/kernel/random", lx_procdir); mkdir(sub, 0555);
-        snprintf(sub, sizeof sub, "%s/sys/fs", lx_procdir); mkdir(sub, 0555);
+        snprintf(sub, sizeof sub, "%s/sys", lx_procdir); mkdir(sub, 0755);
+        snprintf(sub, sizeof sub, "%s/sys/kernel", lx_procdir); mkdir(sub, 0755);
+        snprintf(sub, sizeof sub, "%s/sys/kernel/random", lx_procdir); mkdir(sub, 0755);
+        snprintf(sub, sizeof sub, "%s/sys/fs", lx_procdir); mkdir(sub, 0755);
         snprintf(sub, sizeof sub, "%s/sys/kernel", lx_procdir);
         touchf(sub, "pid_max"); touchf(sub, "osrelease"); touchf(sub, "ostype"); touchf(sub, "hostname");
         touchf(sub, "randomize_va_space"); touchf(sub, "ngroups_max"); touchf(sub, "cap_last_cap");
@@ -3535,6 +3551,40 @@ static void lx_proc_refresh(void)
         closedir(d);
     }
     pthread_mutex_unlock(&lx_proc_mu);
+}
+
+/* A directory under /proc (a process's, its fd/ or task/): opened from the host tree rather than
+ * made like a file, and this process's own made current first (not at the next refresh); its
+ * fd/ lists its descriptors as symlinks to what they are (Python's test suite, lsof, closefrom).
+ * 1 if g is such a directory. */
+static int lx_proc_dir(struct aoi_proc *p, const char *g)
+{
+    char h[AOI_PATH], d[AOI_PATH + 32], ln[AOI_PATH + 64], nm[24];
+    struct stat st;
+    const char *s = g + 6;
+    int pid = 0, self = 0, i;
+    if (!p->linux_mode) return 0;
+    lx_proc_refresh();
+    if (!strncmp(s, "self", 4) && (!s[4] || s[4] == '/')) { pid = PID(p); self = 1; s += 4; }
+    else if (*s >= '0' && *s <= '9') { pid = atoi(s); while (*s >= '0' && *s <= '9') s++; }
+    if (pid && pid == PID(p) && lx_procdir[0]) {
+        snprintf(nm, sizeof nm, "%d", pid);
+        pthread_mutex_lock(&lx_proc_mu);
+        lx_piddir(lx_procdir, nm);
+        if (!strcmp(s, "/fd") || !strcmp(s, "/fd/")) {
+            snprintf(d, sizeof d, "%s/%s/fd", lx_procdir, self ? "self" : nm);
+            rmtree(d);
+            mkdir(d, 0755);
+            for (i = 0; i < AOI_PROC_FDS; i++) {
+                if (!p->fd[i].used) continue;
+                snprintf(ln, sizeof ln, "%s/%d", d, i);
+                if (symlink(p->fd[i].path[0] ? p->fd[i].path : "anon_inode:[unknown]", ln)) {}
+            }
+        }
+        pthread_mutex_unlock(&lx_proc_mu);
+    }
+    to_host(p, g, h);
+    return !stat(h, &st) && S_ISDIR(st.st_mode);
 }
 
 /* What /proc/<pid>/... shows of a process, copied under the registry's lock. */
@@ -3935,7 +3985,7 @@ static uint64_t exec_replace(struct aoi_proc *p, struct aoi_cpu *c, struct aoi_p
     for (i = 0; i < AOI_PROC_FDS; i++) {
         struct aoi_proc_fd *f = &p->fd[i];
         if (!f->used || !f->cloexec) continue;
-        if (f->dir) closedir(f->dir); else close(f->host);
+        if (f->dir) closedir(f->dir); close(f->host);
         if (f->kind == AOI_FD_EPOLL) epoll_unref(f->ep);
         if (f->kind == AOI_FD_EVENTFD) ev_ref(p, f, -1);
         free(f->req);
@@ -4124,6 +4174,8 @@ static uint64_t lx_unix_op(struct aoi_proc *p, struct aoi_proc_fd *f, uint64_t n
         fcntl(sp[1], F_SETFL, O_NONBLOCK);
         pthread_mutex_lock(&lx_unix_mu);
         if ((i = lx_unix_find(key)) >= 0) lx_unix_drop(i);        /* a stale one under the same name */
+        for (i = 0; i < LX_UNIX; i++)                              /* and listeners whose fds are all closed */
+            if (lx_unix[i].used && !lx_unix_alive(i)) lx_unix_drop(i);
         for (i = 0; i < LX_UNIX && lx_unix[i].used; i++) {}
         if (i == LX_UNIX) { pthread_mutex_unlock(&lx_unix_mu); close(sp[0]); close(sp[1]); return err(L_ENOMEM); }
         lx_unix[i].used = 1; lx_unix[i].type = f->ptype ? f->ptype : 1; lx_unix[i].keep = sp[1]; lx_unix[i].nq = 0;
@@ -4316,7 +4368,7 @@ uint64_t aoi_proc_syscall(struct aoi_cpu *c)
     case NR_openat: {
         int hfd, fdn;
         if ((rc = at_path(p, sx32(a0), a1, !(a2 & 0100000), g))) { r = err(rc); break; }
-        if (!strncmp(g, "/proc/", 6)) {                             /* synthetic procfs */
+        if (!strncmp(g, "/proc/", 6) && !lx_proc_dir(p, g)) {      /* synthetic procfs (its directories: below) */
             if ((hfd = proc_file(p, g)) < 0) { r = err(L_ENOENT); break; }
         } else if (p->linux_mode && is_tty_path(g)) {              /* a terminal (core/tty.c) */
             r = tty_open(p, g, a2);
@@ -4425,7 +4477,7 @@ uint64_t aoi_proc_syscall(struct aoi_cpu *c)
         for (fd = a0; fd <= last; fd++) {
             if (!(f = fd_get(p, fd))) continue;
             if (a2 & 4) { f->cloexec = 1; continue; }              /* CLOSE_RANGE_CLOEXEC */
-            if (fd > 2 || p->own_stdio || p->vf) { if (f->dir) closedir(f->dir); else close(f->host); }
+            if (fd > 2 || p->own_stdio || p->vf) { if (f->dir) closedir(f->dir); close(f->host); }
             if (f->kind == AOI_FD_EPOLL) epoll_unref(f->ep);
             if (f->kind == AOI_FD_EVENTFD) ev_ref(p, f, -1);
             if (f->kind == AOI_FD_DNS && f->peer >= 0) close(f->peer);
@@ -4438,7 +4490,7 @@ uint64_t aoi_proc_syscall(struct aoi_cpu *c)
     }
     case NR_close:
         if (!(f = fd_get(p, a0))) { r = err(L_EBADF); break; }
-        if (a0 > 2 || p->own_stdio || p->vf) { if (f->dir) closedir(f->dir); else close(f->host); }
+        if (a0 > 2 || p->own_stdio || p->vf) { if (f->dir) closedir(f->dir); close(f->host); }
         if (f->kind == AOI_FD_EPOLL) epoll_unref(f->ep);
         if (f->kind == AOI_FD_EVENTFD) ev_ref(p, f, -1);
         if (f->kind == AOI_FD_DNS && f->peer >= 0) close(f->peer);
@@ -4631,7 +4683,7 @@ uint64_t aoi_proc_syscall(struct aoi_cpu *c)
         if ((d = dup(f->host)) < 0) { r = herr(); break; }
         if (nr == NR_dup3) {
             struct aoi_proc_fd *t = &p->fd[a1];
-            if (t->used && (a1 > 2 || p->own_stdio || p->vf)) { if (t->dir) closedir(t->dir); else close(t->host); }
+            if (t->used && (a1 > 2 || p->own_stdio || p->vf)) { if (t->dir) closedir(t->dir); close(t->host); }
             /* fds 0-2: the guest's own host fd, never dup2 onto the host's 0-2 (they are
              * the whole iOS process's, and the app's log may be one); the one they had
              * is the embedder's and stays open */
