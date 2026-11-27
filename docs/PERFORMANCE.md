@@ -25,6 +25,8 @@ Other measurements on the same phone:
 | Workload | Before | Now | What changed |
 |---|---:|---:|---|
 | `dnf makecache`, cold | 2 min 22 s | 1 min 27 s | DNS: IPv4 and IPv6 questions in turn (one of two parallel answers was lost on the phone's network; every download waited out a timeout) |
+| `dnf makecache`, cold | 1 min 27 s | **33.6 s** | the XML parser, libsolv's sorting and malloc translated ahead of time (build 65) |
+| `dnf makecache`, cached | — | 4.1 s | |
 | First `dnf` after Repair | 13 s | 2.3 s | unpacking keeps modification times (Python had recompiled every module) |
 | Python loop, 1M iterations, AlmaLinux (translated libraries) | — | 1.33 s | |
 | Python loop, 1M iterations, Debian, interpreter | — | 2.9–3.1 s | |

@@ -6,7 +6,7 @@ builds in between go to TestFlight first.
 ## 1.0.2 — in TestFlight
 
 **Faster AlmaLinux** (measured on an iPhone, AlmaLinux 10; details in [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md))
-- `dnf --version` 4.2 s → 0.39 s; `dnf makecache` 2 min 22 s → 1 min 27 s.
+- `dnf --version` 4.2 s → 0.39 s; `dnf makecache` 2 min 22 s → 33.6 s (in TestFlight after 1.0.2: the XML parser translated too).
 - Fast start: dnf and yum continue from a process saved after dnf's imports instead of starting Python for every command. The snapshot renews itself when dnf, Python or a library it uses changes (an unrelated install keeps it).
 - Libraries translated ahead of time: AlmaLinux's dnf stack (Python, libsolv, rpm, sqlite, OpenSSL and more) runs as code compiled into the app, built in CI for the image the app downloads and shipped only when every check command gives the interpreter's output byte for byte.
 - Hardware AES and SHA instructions (they were up to a third of dnf's time), glibc's string functions on the host.
