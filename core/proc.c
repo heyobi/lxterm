@@ -82,6 +82,7 @@ static int lx_proc_link(struct aoi_proc *p, const char *g, char *out, size_t n);
 struct aoi_vfork {
     int thread, pid;
     int pgid;                                   /* Linux mode: the child's setpgid before its execve */
+    int sid;                                    /* and its setsid (subprocess's start_new_session) */
     uint64_t sigact[65][4];                     /* the parent's handlers: the child's changes are its own */
     char cwd[AOI_PATH];                         /* and its chdir (posix_spawn's file actions) */
     struct aoi_cpu cpu;                         /* the parent at its svc */
@@ -2734,6 +2735,7 @@ static uint64_t vfork_start(struct aoi_proc *p, struct aoi_cpu *c, uint64_t stac
     v->cpu = *c; v->sigmask = p->th[p->cur].sigmask;
     if (stack) c->sp = stack;                                      /* musl/glibc posix_spawn: the child's own stack */
     v->pgid = p->pgid;
+    v->sid = p->sid;
     memcpy(v->sigact, p->sigact, sizeof v->sigact);
     memcpy(v->cwd, p->cwd, sizeof v->cwd);
     memcpy(v->fd, p->fd, sizeof v->fd);
@@ -3143,7 +3145,7 @@ static uint64_t vfork_exec(struct aoi_proc *p, struct aoi_cpu *c, uint64_t pa, u
         setvbuf(np->trace, NULL, _IOLBF, 0);
     if (p->linux_mode) {                                           /* a process of the Linux userland */
         np->linux_mode = 1;
-        np->pid = p->vf->pid; np->ppid = PID(p); np->pgid = p->vf->pgid; np->sid = p->sid;
+        np->pid = p->vf->pid; np->ppid = PID(p); np->pgid = p->vf->pgid; np->sid = p->vf->sid;
         np->th[0].tid = np->pid;
         np->th[0].sigmask = p->th[p->vf->thread].sigmask;
         memcpy(np->cred, p->cred, sizeof np->cred);
@@ -3415,6 +3417,12 @@ void aoi_proc_linux(struct aoi_proc *p, const char *cwd)
     }
     lx_register(p);
     if (!aoi_tty_pgrp) aoi_tty_pgrp = p->pgid;
+    host_path(p, "/dev/shm", h);                                   /* POSIX shared memory and semaphores (sem_open, */
+    if (h[0] && stat(h, &st)) {                                    /* shm_open: Python's multiprocessing); images */
+        host_path(p, "/dev", g);                                   /* ship /dev empty or without it */
+        if (g[0]) mkdir(g, 0755);
+        if (!mkdir(h, 01777)) chmod(h, 01777);
+    }
 }
 
 /* ---------- Linux mode: /proc for every process (ps, top, htop, free, uptime) ----------
@@ -3851,7 +3859,18 @@ static uint64_t lx_fork(struct aoi_proc *p, struct aoi_cpu *c, uint64_t flags, u
     np->binder = NULL; np->sf = NULL; np->af = NULL; np->gralloc = NULL; np->audio = NULL;
     np->frame = NULL; np->home = NULL; np->clip = NULL; np->ime = NULL; np->warm = NULL;
     np->gpu = NULL; np->gpu_live = 0; np->snap_gpu_free = 0; np->input_w = 0;
-    np->nshm = 0;                                                  /* (MAP_SHARED pages: the child's are its own) */
+    np->nshm = 0;                                                  /* MAP_SHARED file mappings stay shared with the */
+    for (i = 0; i < p->nshm; i++) {                                /* parent (POSIX semaphores, multiprocessing's locks): */
+        struct stat st;                                            /* the file's pages mapped again over the copy */
+        int d = dup(p->shm[i].fd);
+        if (d < 0) continue;
+        if (!fstat(d, &st))
+            aoi_vm_map_file(&np->vm, p->shm[i].addr, p->shm[i].len, d, p->shm[i].off, (uint64_t)st.st_size,
+                            (p->shm[i].addr - p->shm[i].off) % SHARED_PAGE ? 1 : 2);
+        np->shm[np->nshm] = p->shm[i];
+        np->shm[np->nshm].fd = d;
+        np->nshm++;
+    }
     np->samples = NULL; np->nsamples = np->maxsamples = 0;
     np->stop_request = np->pause_request = np->snap_request = np->redraw_request = 0;
     np->snap_path[0] = 0;
@@ -4907,6 +4926,12 @@ uint64_t aoi_proc_syscall(struct aoi_cpu *c)
         break;
     case 157:                                                      /* setsid */
         if (!p->linux_mode) { r = GUEST_PID; break; }
+        if (p->vf && p->cur == p->vf->thread) {                    /* a vfork child (subprocess, posix_spawn): */
+            if (p->vf->pgid == p->vf->pid) { r = err(L_EPERM); break; }   /* its own session, not the parent's */
+            p->vf->sid = p->vf->pgid = p->vf->pid;
+            r = (uint64_t)p->vf->pid;
+            break;
+        }
         if (p->pgid == p->pid) { r = err(L_EPERM); break; }
         p->sid = p->pgid = p->pid;
         r = (uint64_t)p->pid;
@@ -5315,6 +5340,10 @@ uint64_t aoi_proc_syscall(struct aoi_cpu *c)
             if (!get(p, a0, w, 4)) { r = err(L_EFAULT); break; }
             if (u32(w) != (uint32_t)a2) { r = err(L_EAGAIN); break; }
             if (op == 9 && !(uint32_t)a5) { r = err(L_EINVAL); break; }
+            if (!(a1 & 128) && !a3) {                              /* a shared futex (another process may wake it: */
+                r = block_and_retry(p, 1000000);                   /* futex_wake sees only this one's threads): */
+                break;                                             /* look at the word again in 1 ms */
+            }
             if (a3) {
                 uint8_t ts[16];
                 int64_t v;
