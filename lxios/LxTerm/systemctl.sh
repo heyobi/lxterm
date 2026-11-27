@@ -1,19 +1,19 @@
 #!/bin/sh
-# LxTerm's systemctl (and journalctl): runs the services packages install, without systemd.
+# Pocket Distro's systemctl (and journalctl): runs the services packages install, without systemd.
 #
-# A tab in LxTerm has no init system: the iPhone does not let an app be one, so systemd
+# A tab in Pocket Distro has no init system: the iPhone does not let an app be one, so systemd
 # cannot run as PID 1. This stand-in reads the same unit files (/etc/systemd/system,
 # /usr/lib/systemd/system...) and does what systemd would do for a service: runs
 # ExecStartPre/ExecStart/ExecStartPost with its Environment, EnvironmentFile and
 # WorkingDirectory, keeps its main PID, writes its output to a log, stops it with
-# ExecStop or a signal. Services run while LxTerm is open (iOS pauses apps it does not
+# ExecStop or a signal. Services run while Pocket Distro is open (iOS pauses apps it does not
 # show); enabled ones start again when a tab opens (/etc/profile.d/lxterm-services.sh).
 # Package scripts still use the distribution's own systemctl (it works offline, in
 # /usr/bin); this one is /usr/local/bin/systemctl, found first in a tab's PATH.
 #
 # Not done: sockets, timers, targets, dependencies between units (After=, Requires=),
 # cgroups, restarts on failure. User= runs the service as that user (exec_as).
-# Installed and updated by LxTerm; changes here are overwritten.
+# Installed and updated by Pocket Distro; changes here are overwritten.
 LXV=1
 ST=/run/lxterm/units
 LOGS=/var/log/lxterm
@@ -134,7 +134,7 @@ os.environ.update(HOME=u.pw_dir, USER=u.pw_name, LOGNAME=u.pw_name)
 os.execvp("sh", ["sh", "-c", "exec " + sys.argv[2]])' "$1" "$3"
     done
     if command -v su >/dev/null 2>&1; then exec su -s /bin/sh "$1" -c "exec $3"; fi
-    echo "LxTerm: no way to run as $1 here (install util-linux); running as root" >&2
+    echo "Pocket Distro: no way to run as $1 here (install util-linux); running as root" >&2
     exec sh -c "exec $3"
 }
 
@@ -162,7 +162,7 @@ state() {   # active, inactive or failed
 
 # One start of a unit at a time: two tabs opened together both run the autostart, and the
 # second must find the service running, not start it again. (mkdir is atomic; a lock
-# left by an ended LxTerm is cleared when it starts again, or here after ~30 s.)
+# left by an ended Pocket Distro is cleared when it starts again, or here after ~30 s.)
 start() {
     lk="$ST/$(unitname "$1").lock" tries=0
     while ! mkdir "$lk" 2>/dev/null; do
@@ -177,11 +177,11 @@ start() {
 
 start_unlocked() {
     setup "$1" || { err "Failed to start $(unitname "$1"): Unit $(unitname "$1") not found."; return 5; }
-    case $UNIT in *.service) ;; *) err "LxTerm: only services can be started ($UNIT)"; return 1 ;; esac
+    case $UNIT in *.service) ;; *) err "Pocket Distro: only services can be started ($UNIT)"; return 1 ;; esac
     [ "$(state)" = active ] && return 0
     rm -f "$ST/$UNIT.failed" "$ST/$UNIT.exited"
     load_env; dirs
-    printf '\n-- %s: starting (LxTerm)\n' "$(date '+%b %d %H:%M:%S')" >> "$LOG"
+    printf '\n-- %s: starting (Pocket Distro)\n' "$(date '+%b %d %H:%M:%S')" >> "$LOG"
     key "$F" Service ExecStartPre > "$ST/.pre.$$"
     while IFS= read -r c; do run_cmd "$c" || { rm -f "$ST/.pre.$$"; touch "$ST/$UNIT.failed"; err "Job for $UNIT failed (ExecStartPre). See \"journalctl -u $UNIT\"."; return 1; }; done < "$ST/.pre.$$"
     rm -f "$ST/.pre.$$"
@@ -231,7 +231,7 @@ stop() {
         rm -f "$ST/.stop.$$"
     fi
     rm -f "$ST/$UNIT.pid" "$ST/$UNIT.exited" "$ST/$UNIT.failed"
-    printf -- '-- %s: stopped (LxTerm)\n' "$(date '+%b %d %H:%M:%S')" >> "$LOG"
+    printf -- '-- %s: stopped (Pocket Distro)\n' "$(date '+%b %d %H:%M:%S')" >> "$LOG"
     return 0
 }
 
@@ -261,7 +261,7 @@ status() {
     elif [ -f "$ST/$UNIT.exited" ]; then printf "     Active: \033[1;32mactive (exited)\033[0m\n"
     elif [ "$s" = failed ]; then printf "     Active: \033[1;31mfailed\033[0m\n"
     else printf '     Active: inactive (dead)\n'; fi
-    printf '       Note: run by LxTerm (no systemd on iPhone): while LxTerm is open\n'
+    printf '       Note: run by Pocket Distro (no systemd on iPhone): while Pocket Distro is open\n'
     if [ -f "$LOG" ]; then echo; tail -n 10 "$LOG"; fi
     [ "$s" = active ] && return 0 || return 3
 }
@@ -313,7 +313,7 @@ journal() {   # journalctl [-u UNIT]... [-f] [-n N] [--no-pager] [-e] [-b]
     done
     if [ -z "$units" ]; then files=$(ls "$LOGS"/*.log 2>/dev/null)
     else files=""; for u in $units; do files="$files $LOGS/$u.log"; done; fi
-    [ -n "$files" ] || { echo "-- No entries (LxTerm keeps the output of the services it runs in $LOGS) --"; return 0; }
+    [ -n "$files" ] || { echo "-- No entries (Pocket Distro keeps the output of the services it runs in $LOGS) --"; return 0; }
     if [ $follow = 1 ]; then exec tail -n "${n:-10}" -f $files; fi
     if [ -n "$n" ]; then tail -q -n "$n" $files 2>/dev/null; else cat $files 2>/dev/null; fi
 }
@@ -335,8 +335,8 @@ for a in "$@"; do
     --now) now=1 ;;
     -q|--quiet) quiet=1 ;;
     --no-pager|--no-block|--no-ask-password|--system|-l|--full|--no-legend|--plain|--all|-a) ;;
-    --user) err "LxTerm: user services are not supported"; exit 1 ;;
-    --version) say "systemd 0 (LxTerm's systemctl $LXV: services without systemd; see 'systemctl help')"; exit 0 ;;
+    --user) err "Pocket Distro: user services are not supported"; exit 1 ;;
+    --version) say "systemd 0 (Pocket Distro's systemctl $LXV: services without systemd; see 'systemctl help')"; exit 0 ;;
     --lxterm-autostart) autostart; exit 0 ;;
     -*) ;;
     *) args="$args $a" ;;
@@ -361,7 +361,7 @@ is-enabled)     for u in "$@"; do if setup "$u"; then s=$(enabled); else s=not-f
 enable)         mkdir -p "$AUTO"
                 for u in "$@"; do
                     setup "$u" || { err "Failed to enable unit: Unit $(unitname "$u") does not exist"; rc=1; continue; }
-                    touch "$AUTO/$UNIT"; [ $quiet = 1 ] || say "Enabled $UNIT: LxTerm starts it when a tab opens."
+                    touch "$AUTO/$UNIT"; [ $quiet = 1 ] || say "Enabled $UNIT: Pocket Distro starts it when a tab opens."
                     [ $now = 1 ] && { start "$u" || rc=$?; }
                 done ;;
 disable)        for u in "$@"; do
@@ -394,12 +394,13 @@ show)           for u in "$@"; do
 list-units|list-unit-files)
                 if [ "$cmd" = list-units ]; then list_units; else list_files; fi ;;
 kill)           for u in "$@"; do setup "$u" && running && kill -TERM "$(mainpid)"; done ;;
-help|-h|--help) say "LxTerm's systemctl: services without systemd (it cannot run on iPhone)."
+help|-h|--help) say "Pocket Distro's systemctl: services without systemd (it cannot run on iPhone)."
                 say "  start|stop|restart|reload|status|enable [--now]|disable|is-active|is-enabled UNIT..."
                 say "  list-units, list-unit-files, cat UNIT, show UNIT; journalctl -u UNIT [-f] [-n N]"
-                say "Services run while LxTerm is open; enabled ones start again when a tab opens." ;;
+                say "Services run while Pocket Distro is open; enabled ones start again when a tab opens." ;;
 poweroff|reboot|halt|suspend|hibernate|isolate|default|rescue|emergency|switch-root)
-                err "LxTerm: $cmd is not possible here (no init system on iPhone)."; rc=1 ;;
-*)              err "LxTerm's systemctl: '$cmd' is not supported ('systemctl help')."; rc=1 ;;
+                err "Pocket Distro: $cmd is not possible here (no init system on iPhone)."; rc=1 ;;
+list|ls|ps)     err "Unknown command '$cmd'. Did you mean 'systemctl list-units' (or list-unit-files)?"; rc=1 ;;
+*)              err "Pocket Distro's systemctl: '$cmd' is not supported ('systemctl help')."; rc=1 ;;
 esac
 exit $rc
